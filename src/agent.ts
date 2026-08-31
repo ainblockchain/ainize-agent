@@ -82,24 +82,43 @@ export async function askModel(api: string, prompt: string, maxTokens = 8): Prom
   return (r.body?.choices?.[0]?.text ?? '').trim();
 }
 
-export async function fetchCatalog(market: string, status = 'LISTED'): Promise<CatalogEntry[]> {
+export async function fetchCatalog(market: string, status = 'LISTED,SUPERSEDED'): Promise<CatalogEntry[]> {
   const r = await getJson<{ items: CatalogEntry[] }>(`${market}/api/catalog?status=${encodeURIComponent(status)}&limit=200&sort=popular`);
   if (r.status !== 200) throw new Error(`catalog request failed: ${r.status} ${r.text.slice(0, 200)}`);
   return r.body?.items ?? [];
 }
 
 /** Keyword match of the question against name/description/schema/id; ties broken by downloads then attestations. */
-export function pickPatch(items: CatalogEntry[], question: string, explicit?: string): CatalogEntry | null {
-  if (explicit) return items.find((e) => e.anchor.id === explicit) ?? null;
+/** Follow supersede marks (도 16 대체 표시) to the newest LISTED patch. */
+export function resolveSupersedes(items: CatalogEntry[], start: CatalogEntry, log?: (l: string) => void): CatalogEntry {
+  let cur = start;
+  const seen = new Set<string>();
+  while (cur.status === 'SUPERSEDED' && cur.superseded_by.length && !seen.has(cur.anchor.id)) {
+    seen.add(cur.anchor.id);
+    const next = cur.superseded_by.map((id) => items.find((e) => e.anchor.id === id)).filter((e): e is CatalogEntry => !!e)
+      .sort((a, b) => (b.status === 'LISTED' ? 1 : 0) - (a.status === 'LISTED' ? 1 : 0) || b.anchor.created_at - a.anchor.created_at)[0];
+    if (!next) break;
+    log?.(`    ${cur.anchor.id} is superseded by ${next.anchor.id} (newer patch on the same benchmark) → switching`);
+    cur = next;
+  }
+  return cur;
+}
+
+export function pickPatch(items: CatalogEntry[], question: string, explicit?: string, log?: (l: string) => void): CatalogEntry | null {
+  if (explicit) {
+    const e = items.find((x) => x.anchor.id === explicit);
+    return e ? resolveSupersedes(items, e, log) : null;
+  }
   const words = question.toLowerCase().split(/[\s,.?!:;()/]+/).filter((w) => w.length >= 2);
   let best: CatalogEntry | null = null; let bestScore = 0;
   for (const e of items) {
+    if (e.status !== 'LISTED' && e.status !== 'SUPERSEDED') continue;
     const hay = [e.anchor.id, e.anchor.name, e.anchor.description, e.anchor.benchmark.schema, e.anchor.topic_path].join(' ').toLowerCase();
     let score = 0;
     for (const w of words) if (hay.includes(w)) score += w.length;
     if (score > bestScore || (score === bestScore && best && (e.downloads > best.downloads || (e.downloads === best.downloads && e.passed > best.passed)))) { best = e; bestScore = score; }
   }
-  return bestScore > 0 ? best : null;
+  return bestScore > 0 && best ? resolveSupersedes(items, best, log) : null;
 }
 
 export async function payFor(req: X402Requirement, identity: Identity, opts: { ainProvider?: string }): Promise<X402Payload> {
@@ -146,8 +165,9 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   // [2] catalog
   step('[2] 카탈로그 검색 (원장 anchor + 검증 정족수)');
   const items = await fetchCatalog(market);
-  const pick = pickPatch(items, question || prompt, o.patch);
-  if (!pick) throw new Error(o.patch ? `patch ${o.patch} is not LISTED on ${market}` : `no listed patch matches "${question}"`);
+  const pick = pickPatch(items, question || prompt, o.patch, log);
+  if (!pick) throw new Error(o.patch ? `patch ${o.patch} is not listed on ${market}` : `no listed patch matches "${question}"`);
+  if (pick.status !== 'LISTED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not LISTED — refusing to buy`);
   if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — 구매 거부`);
   res.patch_id = pick.anchor.id;
   step(`    후보: ${pick.anchor.id}  ${(pick.anchor.size_bytes / 1e6).toFixed(1)} MB  ${pick.anchor.rows} rows  가격 ${pick.anchor.price} ${pick.anchor.currency}  검증자 ${pick.passed}인 정족수 충족 (${pick.attestations.map((a) => a.verified_on).join(', ')})`);
