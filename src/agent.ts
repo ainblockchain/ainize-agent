@@ -174,7 +174,9 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   const items = await fetchCatalog(market);
   const pick = pickPatch(items, question || prompt, o.patch, log, o.patch ? !!o.followLatest : true);
   if (!pick) throw new Error(o.patch ? `patch ${o.patch} is not listed on ${market}` : `no listed patch matches "${question}"`);
-  if (pick.status !== 'LISTED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not LISTED — refusing to buy`);
+  // SUPERSEDED knowledge is still verified and valid (a newer version exists on the same subject) — allowed when explicitly requested.
+  if (pick.status === 'SUPERSEDED' && pick.superseded_by?.length) step(`    note: ${pick.anchor.id} has a newer version on the same subject → ${pick.superseded_by.join(', ')} (use --follow-latest to switch automatically)`);
+  if (pick.status !== 'LISTED' && pick.status !== 'SUPERSEDED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not verified — refusing to buy`);
   if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — refusing to buy`);
   if (o.maxPrice !== undefined && Number(pick.anchor.price) > o.maxPrice) throw new Error(`price ${pick.anchor.price} ${pick.anchor.currency} exceeds --max-price ${o.maxPrice} — refusing to buy (use --max-price to raise the budget)`);
   res.patch_id = pick.anchor.id;
