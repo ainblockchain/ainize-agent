@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
+    "ainize-agent": "./dist/bin.js",
     "ngram-agent": "./dist/bin.js"
   },
   "scripts": {
@@ -21,7 +22,7 @@
     "@types/yargs": "^17.0.35",
     "tsx": "^4.23.13"
   },
-  "description": "ngram-agent \u2014 autonomous x402 buyer agent for knowledge patches",
+  "description": "ainize-agent — autonomous buyer agent for the Ainize knowledge marketplace (automatic x402 payment, live load); `ngram-agent` alias kept",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

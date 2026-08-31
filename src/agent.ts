@@ -1,5 +1,6 @@
 /**
- * Autonomous buyer agent (rebuild of the patent prototype's agent_client.py on the node protocol):
+ * Ainize buyer agent — an AI agent that ainizes its own knowledge gap: (rebuild of the patent prototype's
+ * agent_client.py on the node protocol)
  *   [1] detect missing knowledge on the serving model → [2] find a LISTED patch in the catalog (quorum required)
  *   → [3] GET the x402 gateway → 402 → [4] pay (local-credit signed intent or AIN transfer) and retry with X-PAYMENT
  *   → [5] verify manifest hash, download the body, verify sha256 against the on-ledger anchor
@@ -261,10 +262,32 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   return res;
 }
 
-/** local-credit balance of an address, derived like Market.creditBalance (initial credit assumed 100 — the node does not expose it). */
-export async function creditBalance(market: string, address: string, initialCredit = 100): Promise<number> {
-  const r = await getJson<{ records: { kind: string; body: { scheme?: string; buyer?: string; amount?: string; royalty?: Record<string, string> } }[] }>(`${market.replace(/\/+$/, '')}/api/ledger?kind=settle&limit=1000`);
-  let bal = initialCredit;
+/** Market-wide info (GET /api/info): the node's configured initial credit for new buyers, currency, quorum … */
+export interface MarketInfo { initial_credit: string | number; currency: string; quorum: number; node: { address: string; name: string; model?: string | null }; counts: { patches: number; listed: number } }
+
+export async function fetchInfo(market: string): Promise<MarketInfo> {
+  const r = await getJson<MarketInfo>(`${market.replace(/\/+$/, '')}/api/info`, {}, 10_000);
+  if (r.status !== 200 || !r.body) throw new Error(`info request failed: ${r.status} ${r.text.slice(0, 200)}`);
+  return r.body;
+}
+
+/** The node's initial local-credit grant per new address (market.initialCredit, exposed as /api/info.initial_credit). */
+export async function fetchInitialCredit(market: string): Promise<number> {
+  const info = await fetchInfo(market);
+  const n = Number(info.initial_credit);
+  if (!Number.isFinite(n)) throw new Error(`node did not report a numeric initial_credit (${JSON.stringify(info.initial_credit)})`);
+  return n;
+}
+
+/**
+ * local-credit balance of an address, derived like Market.creditBalance: initial credit (read from
+ * GET /api/info.initial_credit unless given) − purchases + royalties received.
+ */
+export async function creditBalance(market: string, address: string, initialCredit?: number): Promise<number> {
+  const base = market.replace(/\/+$/, '');
+  const initial = initialCredit ?? await fetchInitialCredit(base);
+  const r = await getJson<{ records: { kind: string; body: { scheme?: string; buyer?: string; amount?: string; royalty?: Record<string, string> } }[] }>(`${base}/api/ledger?kind=settle&limit=1000`);
+  let bal = initial;
   for (const rec of r.body?.records ?? []) {
     const s = rec.body;
     if (s.scheme !== 'local-credit') continue;

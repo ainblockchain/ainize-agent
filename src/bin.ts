@@ -1,20 +1,29 @@
 #!/usr/bin/env node
-/** `ngram-agent` — autonomous knowledge buyer (x402) for the marketplace. */
+/**
+ * `ainize-agent` (alias `ngram-agent`) — autonomous knowledge buyer for the Ainize marketplace: notices the model
+ * does not know something, buys a verified knowledge patch with automatic payment (HTTP 402) and loads it.
+ */
 import './quiet.js';
+import { basename } from 'node:path';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import chalk from 'chalk';
-import { creditBalance, fetchCatalog, runAgent, type AgentOptions } from './agent.js';
+import { creditBalance, fetchCatalog, fetchInitialCredit, runAgent, type AgentOptions } from './agent.js';
 import { agentHome, loadIdentity } from './identity.js';
 
+// Two bins point here: `ainize-agent` (product name, Ainize = AI + -ize) and the historical `ngram-agent`.
+const PROG_NAMES = ['ainize-agent', 'ngram-agent'];
+const argv1 = basename(process.argv[1] ?? '').replace(/\.(c|m)?js$/, '');
+const PROG = PROG_NAMES.includes(argv1) ? argv1 : 'ainize-agent';
+
 const cli = yargs(hideBin(process.argv))
-  .scriptName('ngram-agent')
-  .usage('$0 <command> [options]\n\nAn agent that detects missing knowledge, buys a verified patch over HTTP 402 and applies it.')
+  .scriptName(PROG)
+  .usage('$0 <command> [options]\n\nAinize agent — an AI agent that ainizes its own knowledge gap: detects a missing fact on the serving model,\nbuys a verified knowledge patch from an Ainize node with automatic payment (HTTP 402 / x402) and loads it live.')
   .option('market', { type: 'string', describe: 'marketplace node URL', default: process.env.NGRAM_MARKET ?? 'http://localhost:3402', global: true })
   .option('home', { type: 'string', describe: 'agent home (identity, downloads)', default: undefined, global: true })
   .option('json', { type: 'boolean', default: false, global: true })
   .alias('h', 'help').help().version().strict().wrap(Math.min(110, process.stdout.columns || 100))
-  .demandCommand(1, 'Specify a command. Try `ngram-agent --help`.');
+  .demandCommand(1, `Specify a command. Try \`${PROG} --help\`.`);
 
 cli.command('run', 'Detect → discover → pay (402) → download → verify → apply', (y) => y
   .option('question', { type: 'string', default: '픽셀플러스 종목코드 알려줘', describe: 'natural question (used to search the catalog)' })
@@ -49,11 +58,19 @@ cli.command('catalog', 'List LISTED patches on the market', (y) => y.option('sta
   if (!items.length) process.stdout.write(chalk.gray('(no patches)\n'));
 });
 
-cli.command('balance', 'Show this agent\'s local-credit balance on a market (assumes the node\'s default 100 initial credit)', (y) => y.option('initial', { type: 'number', default: 100 }), async (a) => {
+cli.command('balance', 'Show this agent\'s local-credit balance on a market (initial credit read from the node\'s /api/info)', (y) => y
+  .option('initial', { type: 'number', describe: 'override the initial credit instead of reading /api/info.initial_credit' }), async (a) => {
   const id = loadIdentity(agentHome(a.home));
-  const bal = await creditBalance(a.market, id.address, a.initial);
-  if (a.json) process.stdout.write(JSON.stringify({ address: id.address, balance: bal, currency: 'CREDIT', assumed_initial_credit: a.initial }) + '\n');
-  else process.stdout.write(`${id.address}  ${bal} CREDIT ${chalk.gray(`(assuming ${a.initial} initial credit — the node does not expose market.initialCredit)`)}\n`);
+  try {
+    const initial = a.initial ?? await fetchInitialCredit(a.market);
+    const bal = await creditBalance(a.market, id.address, initial);
+    const src = a.initial !== undefined ? 'override' : `${a.market}/api/info`;
+    if (a.json) process.stdout.write(JSON.stringify({ address: id.address, balance: bal, currency: 'CREDIT', initial_credit: initial, initial_credit_source: src }) + '\n');
+    else process.stdout.write(`${id.address}  ${bal} CREDIT ${chalk.gray(`(initial credit ${initial} from ${src}; CREDIT = local dev credit of this node, not AIN)`)}\n`);
+  } catch (e) {
+    process.stderr.write(chalk.red('balance failed: ') + (e as Error).message + '\n');
+    process.exit(1);
+  }
 });
 
 cli.command('keys', 'Show (or create) the agent identity', (y) => y.option('reveal', { type: 'boolean', default: false }), async (a) => {
