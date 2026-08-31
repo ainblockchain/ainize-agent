@@ -136,7 +136,7 @@ export async function payFor(req: X402Requirement, identity: Identity, opts: { a
   if (req.scheme === 'ain-transfer') {
     const ledger = new AinLedger({ providerUrl: opts.ainProvider ?? 'http://localhost:8081', chainId: 0 }, identity);
     try {
-      const bal = await ledger.balance();
+      const bal = Number((await ledger.balance()) ?? 0) || 0;   // unknown account → 0 AIN (not null)
       if (bal < Number(req.maxAmountRequired)) throw new Error(`agent ${identity.address} holds ${bal} AIN < price ${req.maxAmountRequired} (fund it: ngram chain fund ${identity.address})`);
       const t = await ledger.transfer(req.payTo, Number(req.maxAmountRequired));
       return { scheme: 'ain-transfer', network: req.network, txHash: t.tx_hash, from: identity.address, to: req.payTo, amount: req.maxAmountRequired, nonce: req.nonce };
@@ -172,6 +172,11 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   // [2] catalog
   step('[2] searching the catalog (ledger anchors + verification quorum)');
   const items = await fetchCatalog(market);
+  // An explicitly requested id may be hidden from the public listing (visibility: test) — resolve it directly, it is still a verified on-ledger anchor.
+  if (o.patch && !items.some((e) => e.anchor.id === o.patch)) {
+    const direct = await getJson<CatalogEntry>(`${market}/api/patches/${encodeURIComponent(o.patch)}`);
+    if (direct.status === 200 && direct.body?.anchor?.id === o.patch) items.push(direct.body);
+  }
   const pick = pickPatch(items, question || prompt, o.patch, log, o.patch ? !!o.followLatest : true);
   if (!pick) throw new Error(o.patch ? `patch ${o.patch} is not listed on ${market}` : `no listed patch matches "${question}"`);
   // SUPERSEDED knowledge is still verified and valid (a newer version exists on the same subject) — allowed when explicitly requested.
