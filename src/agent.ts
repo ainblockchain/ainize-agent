@@ -90,7 +90,7 @@ export async function fetchCatalog(market: string, status = 'LISTED,SUPERSEDED')
 }
 
 /** Keyword match of the question against name/description/schema/id; ties broken by downloads then attestations. */
-/** Follow supersede marks (도 16 대체 표시) to the newest LISTED patch. */
+/** Follow supersede marks (patent fig. 16) to the newest LISTED patch. */
 export function resolveSupersedes(items: CatalogEntry[], start: CatalogEntry, log?: (l: string) => void): CatalogEntry {
   let cur = start;
   const seen = new Set<string>();
@@ -157,7 +157,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
     res.before = await askModel(api, prompt, o.maxTokens ?? 8);
     modelOk = true;
     const hit = !!o.expect && res.before.startsWith(o.expect);
-    step(`    현재 답: ${JSON.stringify(res.before)}  → ${hit ? 'correct — nothing to buy' : 'wrong/unknown — knowledge purchase needed'}`);
+    step(`    current answer: ${JSON.stringify(res.before)}  → ${hit ? 'correct — nothing to buy' : 'wrong/unknown — knowledge purchase needed'}`);
     if (hit) { res.already_known = true; res.success = true; return res; }
   } catch (e) {
     step(`    serving API unreachable (${(e as Error).message}) — skipping the knowledge check`);
@@ -171,7 +171,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   if (pick.status !== 'LISTED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not LISTED — refusing to buy`);
   if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — refusing to buy`);
   res.patch_id = pick.anchor.id;
-  step(`    candidate: ${pick.anchor.id}  ${(pick.anchor.size_bytes / 1e6).toFixed(1)} MB  ${pick.anchor.rows} rows  price ${pick.anchor.price} ${pick.anchor.currency}  검증자 ${pick.passed}인 정족수 충족 (${pick.attestations.map((a) => a.verified_on).join(', ')})`);
+  step(`    candidate: ${pick.anchor.id}  ${(pick.anchor.size_bytes / 1e6).toFixed(1)} MB  ${pick.anchor.rows} rows  price ${pick.anchor.price} ${pick.anchor.currency}  quorum met by ${pick.passed} verifier(s) (${pick.attestations.map((a) => a.verified_on).join(', ')})`);
 
   // [3] 402
   const gateway = (pick.anchor as CatalogEntry['anchor'] & { gateway_url?: string }).gateway_url ?? `${market}/x402/patch/${pick.anchor.id}`;
