@@ -33,6 +33,8 @@ const cli = yargs(hideBin(process.argv))
 cli.command('run', 'Detect → discover → pay (402) → download → verify → apply', (y) => y
   .option('question', { type: 'string', default: '픽셀플러스 종목코드 알려줘', describe: 'natural question (used to search the catalog)' })
   .option('expect', { type: 'string', default: '087600', describe: 'expected answer prefix' })
+  .option('max-price', { type: 'number', describe: 'refuse to pay more than this amount (seller currency)' })
+  .option('follow-latest', { type: 'boolean', default: false, describe: 'with --patch: switch to the newest version when the requested one is superseded' })
   .option('prompt', { type: 'string', default: '종목코드 픽셀플러스 ', describe: 'raw completion prompt for the model' })
   .option('api', { type: 'string', default: process.env.ENGRAM_API_PUBLIC ?? 'http://localhost:8000', describe: 'serving API (OpenAI-compatible)' })
   .option('patch', { type: 'string', describe: 'patch id to buy (skip search)' })

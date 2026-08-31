@@ -23,6 +23,10 @@ import { agentHome, authHeader, loadIdentity } from './identity.js';
 const execFileP = promisify(execFile);
 
 export interface AgentOptions {
+  /** refuse purchases above this amount (in the seller's currency) */
+  maxPrice?: number;
+  /** with an explicit patch id: follow supersede marks to the newest version (off by default) */
+  followLatest?: boolean;
   market: string;
   question?: string;
   expect?: string;
@@ -105,10 +109,12 @@ export function resolveSupersedes(items: CatalogEntry[], start: CatalogEntry, lo
   return cur;
 }
 
-export function pickPatch(items: CatalogEntry[], question: string, explicit?: string, log?: (l: string) => void): CatalogEntry | null {
+export function pickPatch(items: CatalogEntry[], question: string, explicit?: string, log?: (l: string) => void, followLatest = true): CatalogEntry | null {
   if (explicit) {
     const e = items.find((x) => x.anchor.id === explicit);
-    return e ? resolveSupersedes(items, e, log) : null;
+    if (!e) return null;
+    // An explicitly requested id is honoured as-is unless the caller opted into following newer versions.
+    return followLatest ? resolveSupersedes(items, e, log) : e;
   }
   const words = question.toLowerCase().split(/[\s,.?!:;()/]+/).filter((w) => w.length >= 2);
   let best: CatalogEntry | null = null; let bestScore = 0;
@@ -166,10 +172,11 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   // [2] catalog
   step('[2] searching the catalog (ledger anchors + verification quorum)');
   const items = await fetchCatalog(market);
-  const pick = pickPatch(items, question || prompt, o.patch, log);
+  const pick = pickPatch(items, question || prompt, o.patch, log, o.patch ? !!o.followLatest : true);
   if (!pick) throw new Error(o.patch ? `patch ${o.patch} is not listed on ${market}` : `no listed patch matches "${question}"`);
   if (pick.status !== 'LISTED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not LISTED — refusing to buy`);
   if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — refusing to buy`);
+  if (o.maxPrice !== undefined && Number(pick.anchor.price) > o.maxPrice) throw new Error(`price ${pick.anchor.price} ${pick.anchor.currency} exceeds --max-price ${o.maxPrice} — refusing to buy (use --max-price to raise the budget)`);
   res.patch_id = pick.anchor.id;
   step(`    candidate: ${pick.anchor.id}  ${(pick.anchor.size_bytes / 1e6).toFixed(1)} MB  ${pick.anchor.rows} rows  price ${pick.anchor.price} ${pick.anchor.currency}  quorum met by ${pick.passed} verifier(s) (${pick.attestations.map((a) => a.verified_on).join(', ')})`);
 
