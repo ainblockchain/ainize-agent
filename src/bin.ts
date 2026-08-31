@@ -18,7 +18,12 @@ const PROG = PROG_NAMES.includes(argv1) ? argv1 : 'ainize-agent';
 
 const cli = yargs(hideBin(process.argv))
   .scriptName(PROG)
-  .usage('$0 <command> [options]\n\nAinize agent — an AI agent that ainizes its own knowledge gap: detects a missing fact on the serving model,\nbuys a verified knowledge patch from an Ainize node with automatic payment (HTTP 402 / x402) and loads it live.')
+  .usage([
+    '$0 <command> [options]', '',
+    'Ainize agent — an AI agent that ainizes its own knowledge gap: it detects a missing fact on the',
+    'serving model, buys a verified knowledge patch from an Ainize node with automatic payment',
+    '(HTTP 402 / x402) and loads it into the running model.',
+  ].join('\n'))
   .option('market', { type: 'string', describe: 'marketplace node URL', default: process.env.NGRAM_MARKET ?? 'http://localhost:3402', global: true })
   .option('home', { type: 'string', describe: 'agent home (identity, downloads)', default: undefined, global: true })
   .option('json', { type: 'boolean', default: false, global: true })
@@ -37,8 +42,8 @@ cli.command('run', 'Detect → discover → pay (402) → download → verify �
   .option('ain-provider', { type: 'string', default: process.env.AIN_PROVIDER_URL ?? 'http://localhost:8081' })
   .option('private-key', { type: 'string', describe: 'use this key instead of the stored identity' })
   .option('max-tokens', { type: 'number', default: 8 })
-  .example('$0 run --market http://localhost:3402', 'default KRX demo (픽셀플러스 087600)')
-  .example('$0 run --patch law-kr-2026 --question "한국법 개정" --expect never', 'buy a specific patch'),
+  .example('$0 run --market http://localhost:3402', 'default KRX demo (Pixelplus 087600)')
+  .example('$0 run --patch krx-all-2761 --question "Samsung Electronics ticker code" --prompt "종목코드 삼성전자 " --expect 005930', 'buy a specific knowledge'),
 async (a) => {
   const opts: AgentOptions = { market: a.market, question: a.question, expect: a.expect, prompt: a.prompt, api: a.api, patch: a.patch, repo: a.repo, keep: a.keep, home: a.home, pay: a.pay as AgentOptions['pay'], ainProvider: a['ain-provider'], privateKey: a['private-key'], maxTokens: a['max-tokens'] };
   try {

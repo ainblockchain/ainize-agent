@@ -151,31 +151,31 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
 
   step(`[0] agent ${identity.address}  market ${market}`);
   // [1] knowledge check
-  step(`[1] 질의: ${JSON.stringify(question || prompt)}`);
+  step(`[1] question: ${JSON.stringify(question || prompt)}`);
   let modelOk = false;
   try {
     res.before = await askModel(api, prompt, o.maxTokens ?? 8);
     modelOk = true;
     const hit = !!o.expect && res.before.startsWith(o.expect);
-    step(`    현재 답: ${JSON.stringify(res.before)}  → ${hit ? '정답 — 구매 불필요' : '오답/미지 — 지식 구매 필요'}`);
+    step(`    현재 답: ${JSON.stringify(res.before)}  → ${hit ? 'correct — nothing to buy' : 'wrong/unknown — knowledge purchase needed'}`);
     if (hit) { res.already_known = true; res.success = true; return res; }
   } catch (e) {
     step(`    serving API unreachable (${(e as Error).message}) — skipping the knowledge check`);
   }
 
   // [2] catalog
-  step('[2] 카탈로그 검색 (원장 anchor + 검증 정족수)');
+  step('[2] searching the catalog (ledger anchors + verification quorum)');
   const items = await fetchCatalog(market);
   const pick = pickPatch(items, question || prompt, o.patch, log);
   if (!pick) throw new Error(o.patch ? `patch ${o.patch} is not listed on ${market}` : `no listed patch matches "${question}"`);
   if (pick.status !== 'LISTED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not LISTED — refusing to buy`);
-  if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — 구매 거부`);
+  if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — refusing to buy`);
   res.patch_id = pick.anchor.id;
-  step(`    후보: ${pick.anchor.id}  ${(pick.anchor.size_bytes / 1e6).toFixed(1)} MB  ${pick.anchor.rows} rows  가격 ${pick.anchor.price} ${pick.anchor.currency}  검증자 ${pick.passed}인 정족수 충족 (${pick.attestations.map((a) => a.verified_on).join(', ')})`);
+  step(`    candidate: ${pick.anchor.id}  ${(pick.anchor.size_bytes / 1e6).toFixed(1)} MB  ${pick.anchor.rows} rows  price ${pick.anchor.price} ${pick.anchor.currency}  검증자 ${pick.passed}인 정족수 충족 (${pick.attestations.map((a) => a.verified_on).join(', ')})`);
 
   // [3] 402
   const gateway = (pick.anchor as CatalogEntry['anchor'] & { gateway_url?: string }).gateway_url ?? `${market}/x402/patch/${pick.anchor.id}`;
-  step(`[3] 자원 요청 → GET ${gateway}`);
+  step(`[3] requesting the resource → GET ${gateway}`);
   const r1 = await getJson<{ requirements?: X402Requirement[] }>(gateway, { headers: { 'x-ngram-buyer': identity.address } });
   let manifestText: string;
   let manifest: PatchManifest;
@@ -187,7 +187,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
     if (!req) throw new Error(`402 without a usable payment requirement (offered: ${reqs.map((q) => q.scheme).join(',') || 'none'})`);
     step(`    402 Payment Required: ${req.maxAmountRequired} ${req.asset} → ${req.payTo}  (${req.scheme}, nonce ${req.nonce})`);
     // [4] pay
-    step(`[4] 결제 증명 생성 (${req.scheme === 'ain-transfer' ? 'AIN 체인 전송' : '서명된 크레딧 지급 의사'}) 후 재요청`);
+    step(`[4] paying (${req.scheme === 'ain-transfer' ? 'AIN transfer on chain' : 'signed credit intent'}) and retrying with the proof`);
     const payload = await payFor(req, identity, { ainProvider: o.ainProvider });
     res.scheme = payload.scheme; res.amount = req.maxAmountRequired;
     const r2 = await getJson<unknown>(gateway, { headers: { [X402_HEADER_PAYMENT]: encodePayload(payload), 'x-ngram-buyer': identity.address } }, 120_000);
@@ -196,10 +196,10 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
     manifest = JSON.parse(manifestText) as PatchManifest;
     contentSha = r2.headers.get('x-content-sha256');
     res.tx_hash = r2.headers.get('x-payment-tx-hash') ?? payload.txHash;
-    step(`    정산 완료: tx ${res.tx_hash}  ${r2.headers.get('x-payment-response') ?? ''}`.trimEnd());
+    step(`    settled: tx ${res.tx_hash}  ${r2.headers.get('x-payment-response') ?? ''}`.trimEnd());
   } else if (r1.status === 200) {
     manifestText = r1.text; manifest = JSON.parse(manifestText) as PatchManifest; contentSha = r1.headers.get('x-content-sha256'); res.scheme = 'free';
-    step('    무료 자원 — 결제 없이 매니페스트 수신');
+    step('    free resource — manifest received without payment');
   } else {
     throw new Error(`gateway answered ${r1.status}: ${r1.text.slice(0, 300)}`);
   }
@@ -208,7 +208,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   const mSha = sha256Hex(manifestText);
   if (contentSha && contentSha !== mSha) throw new Error(`manifest hash mismatch: header ${contentSha} vs computed ${mSha}`);
   if (manifest.patch_sha256 !== pick.anchor.patch_sha256) throw new Error('manifest sha256 differs from the on-ledger anchor');
-  step(`[5] 매니페스트 sha256 ${mSha.slice(0, 16)}… 일치 · 본문 sha256 ${manifest.patch_sha256.slice(0, 16)}… (온체인 anchor와 동일)`);
+  step(`[5] manifest sha256 ${mSha.slice(0, 16)}… matches · body sha256 ${manifest.patch_sha256.slice(0, 16)}… (same as the on-ledger anchor)`);
   const dir = join(home, 'patches');
   mkdirSync(dir, { recursive: true });
   const dest = join(dir, `${manifest.patch_sha256}.npz`);
@@ -220,16 +220,16 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
         if (!r.ok || !r.body) throw new Error(`${url} → ${r.status}`);
         await pipeline(Readable.fromWeb(r.body as never), createWriteStream(`${dest}.part`));
         renameSync(`${dest}.part`, dest);
-        step(`    수신 ${(manifest.size_bytes / 1e6).toFixed(1)} MB from ${url}`);
+        step(`    received ${(manifest.size_bytes / 1e6).toFixed(1)} MB from ${url}`);
         lastErr = null; break;
       } catch (e) { lastErr = e as Error; }
     }
     if (lastErr) throw new Error(`download failed: ${lastErr.message}`);
-  } else step('    본문 이미 보유 — 다운로드 생략');
+  } else step('    body already present — download skipped');
   const got = await sha256File(dest);
   if (got !== manifest.patch_sha256) throw new Error(`sha256 mismatch after download: ${got}`);
   res.sha256 = got; res.path = dest;
-  step('    sha256 == 온체인 anchor 해시 — 임의 피어 수신이어도 무결성 보장');
+  step('    sha256 == on-ledger anchor hash — integrity holds no matter which peer served it');
 
   // [6] runtime apply
   const repo = o.repo ?? '/mnt/newdata/qwen3.8';
@@ -237,28 +237,28 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
     let hook = false;
     try { const { stdout } = await execFileP('python3', ['-c', 'from engram import live; print("1" if live.available() else "0")'], { cwd: repo, timeout: 20_000 }); hook = stdout.trim().endsWith('1'); } catch { hook = false; }
     if (hook) {
-      step('[6] 런타임 적용 (무중단)');
+      step('[6] loading into the running model (no restart)');
       const ap = await execFileP('python3', ['scripts/patch.py', 'apply', dest], { cwd: repo, timeout: 10 * 60_000 });
       step(`    ${ap.stdout.trim()}`);
       res.applied = true;
       res.after = await askModel(api, prompt, o.maxTokens ?? 8);
       const ok = !!o.expect && res.after.startsWith(o.expect);
-      step(`    적용 후 답: ${JSON.stringify(res.after)}  → ${ok ? '정답' : o.expect ? '불일치' : '(기대값 미지정)'}`);
+      step(`    answer with knowledge: ${JSON.stringify(res.after)}  → ${ok ? 'correct' : o.expect ? 'mismatch' : '(no expected value given)'}`);
       if (!o.keep) {
         const rm = await execFileP('python3', ['scripts/patch.py', 'remove', dest], { cwd: repo, timeout: 10 * 60_000 });
         res.restored = true;
-        step(`    원복 완료 (구독 종료): ${rm.stdout.trim()}`);
+        step(`    restored (subscription ended): ${rm.stdout.trim()}`);
       }
       res.success = !o.expect || ok;
     } else {
-      step('[6] 패치 훅 없음 (ENGRAM_HOOK=1 로 서빙 필요) — 적용 단계 생략');
+      step('[6] no patch hook (serve with ENGRAM_HOOK=1) — apply step skipped');
       res.success = true;
     }
   } else {
-    step(`[6] 런타임 없음 (${repo}) — 적용 단계 생략; 본문은 ${dest}`);
+    step(`[6] no runtime (${repo}) — apply step skipped; body kept at ${dest}`);
     res.success = true;
   }
-  step(`결과: ${res.success ? '성공 — 402 구매 루프 완결' : '실패'}`);
+  step(`result: ${res.success ? 'SUCCESS — the 402 purchase loop completed' : 'FAILED'}`);
   return res;
 }
 
