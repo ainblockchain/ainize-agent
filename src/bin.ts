@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** `ngram-agent` — autonomous knowledge buyer (x402) for the marketplace. */
+import './quiet.js';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import chalk from 'chalk';
@@ -30,7 +31,7 @@ cli.command('run', 'Detect → discover → pay (402) → download → verify �
   .example('$0 run --market http://localhost:3402', 'default KRX demo (픽셀플러스 087600)')
   .example('$0 run --patch law-kr-2026 --question "한국법 개정" --expect never', 'buy a specific patch'),
 async (a) => {
-  const opts: AgentOptions = { market: a.market, question: a.question, expect: a.expect, prompt: a.prompt, api: a.api, patch: a.patch, repo: a.repo, keep: a.keep, home: a.home, pay: a.pay, ainProvider: a['ain-provider'], privateKey: a['private-key'], maxTokens: a['max-tokens'] };
+  const opts: AgentOptions = { market: a.market, question: a.question, expect: a.expect, prompt: a.prompt, api: a.api, patch: a.patch, repo: a.repo, keep: a.keep, home: a.home, pay: a.pay as AgentOptions['pay'], ainProvider: a['ain-provider'], privateKey: a['private-key'], maxTokens: a['max-tokens'] };
   try {
     const res = await runAgent(opts, a.json ? () => undefined : (l) => process.stdout.write(l + '\n'));
     if (a.json) process.stdout.write(JSON.stringify(res, null, 2) + '\n');
