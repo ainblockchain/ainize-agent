@@ -183,6 +183,8 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   if (pick.status === 'SUPERSEDED' && pick.superseded_by?.length) step(`    note: ${pick.anchor.id} has a newer version on the same subject → ${pick.superseded_by.join(', ')} (use --follow-latest to switch automatically)`);
   if (pick.status !== 'LISTED' && pick.status !== 'SUPERSEDED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not verified — refusing to buy`);
   if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — refusing to buy`);
+  // `sellable` is false while a verifier's challenge is open: quorum alone is not permission to spend (item 153).
+  if (pick.sellable === false) throw new Error(`${pick.anchor.id} is challenged by a verifier and not for sale until it is re-verified${pick.open_challenge ? `: "${pick.open_challenge.reason}"` : ''} — refusing to buy`);
   if (o.maxPrice !== undefined && Number(pick.anchor.price) > o.maxPrice) throw new Error(`price ${pick.anchor.price} ${pick.anchor.currency} exceeds --max-price ${o.maxPrice} — refusing to buy (use --max-price to raise the budget)`);
   res.patch_id = pick.anchor.id;
   step(`    candidate: ${pick.anchor.id}  ${(pick.anchor.size_bytes / 1e6).toFixed(1)} MB  ${pick.anchor.rows} rows  price ${pick.anchor.price} ${pick.anchor.currency}  quorum met by ${pick.passed} verifier(s) (${pick.attestations.map((a) => a.verified_on).join(', ')})`);
