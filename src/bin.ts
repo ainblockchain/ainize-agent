@@ -8,7 +8,7 @@ import { basename } from 'node:path';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import chalk from 'chalk';
-import { creditBalance, fetchCatalog, fetchInitialCredit, runAgent, type AgentOptions } from './agent.js';
+import { creditBalance, fetchCatalog, fetchInitialCredit, pendingFile, readPending, runAgent, type AgentOptions } from './agent.js';
 import { agentHome, loadIdentity } from './identity.js';
 
 // Two bins point here: `ainize-agent` (product name, Ainize = AI + -ize) and the historical `ngram-agent`.
@@ -36,10 +36,13 @@ cli.command('run', 'Detect → discover → pay (402) → download → verify �
   .option('max-price', { type: 'number', describe: 'refuse to pay more than this amount (seller currency)' })
   .option('follow-latest', { type: 'boolean', default: false, describe: 'with --patch: switch to the newest version when the requested one is superseded' })
   .option('prompt', { type: 'string', default: '종목코드 픽셀플러스 ', describe: 'raw completion prompt for the model' })
-  .option('api', { type: 'string', default: process.env.ENGRAM_API_PUBLIC ?? 'http://localhost:8000', describe: 'serving API (OpenAI-compatible)' })
+  // Item 230: no default here. The serving API is READ FROM THE MARKET NODE (`GET /api/runtime`) unless one is
+  // named, so the before/after is measured on the model the knowledge was actually loaded into.
+  .option('api', { type: 'string', describe: 'serving API (OpenAI-compatible); default: whatever the market node reports at /api/runtime' })
   .option('patch', { type: 'string', describe: 'patch id to buy (skip search)' })
-  .option('repo', { type: 'string', default: '/mnt/newdata/qwen3.8', describe: 'runtime repo with scripts/patch.py' })
-  .option('keep', { type: 'boolean', default: false, describe: 'leave the patch applied' })
+  // …and no default repo either: writing into a shared model that belongs to a node is opt-in, under that node's lock.
+  .option('repo', { type: 'string', describe: 'load the knowledge directly into this runtime repo (takes the node\'s runtime lock); omitted = do not touch the model' })
+  .option('restore', { type: 'boolean', default: false, describe: 'unload the knowledge again after the check (default: leave it loaded — removing it writes the model\'s own rows back over whatever else is loaded)' })
   .option('pay', { choices: ['auto', 'local-credit', 'ain-transfer'] as const, default: 'auto' })
   .option('ain-provider', { type: 'string', default: process.env.AIN_PROVIDER_URL ?? 'http://localhost:8081' })
   .option('private-key', { type: 'string', describe: 'use this key instead of the stored identity' })
@@ -47,13 +50,26 @@ cli.command('run', 'Detect → discover → pay (402) → download → verify �
   .example('$0 run --market http://localhost:3402', 'default KRX demo (Pixelplus 087600)')
   .example('$0 run --patch krx-all-2761 --question "Samsung Electronics ticker code" --prompt "종목코드 삼성전자 " --expect 005930', 'buy a specific knowledge'),
 async (a) => {
-  const opts: AgentOptions = { market: a.market, question: a.question, expect: a.expect, prompt: a.prompt, api: a.api, patch: a.patch, repo: a.repo, keep: a.keep, home: a.home, pay: a.pay as AgentOptions['pay'], ainProvider: a['ain-provider'], privateKey: a['private-key'], maxTokens: a['max-tokens'], maxPrice: a['max-price'], followLatest: a['follow-latest'] };
+  const opts: AgentOptions = { market: a.market, question: a.question, expect: a.expect, prompt: a.prompt, api: a.api, patch: a.patch, repo: a.repo, keep: !a.restore, home: a.home, pay: a.pay as AgentOptions['pay'], ainProvider: a['ain-provider'], privateKey: a['private-key'], maxTokens: a['max-tokens'], maxPrice: a['max-price'], followLatest: a['follow-latest'] };
+  const steps: string[] = [];
   try {
-    const res = await runAgent(opts, a.json ? () => undefined : (l) => process.stdout.write(l + '\n'));
+    const res = await runAgent(opts, (l) => { steps.push(l); if (!a.json) process.stdout.write(l + '\n'); });
     if (a.json) process.stdout.write(JSON.stringify(res, null, 2) + '\n');
     process.exit(res.success ? 0 : 1);
   } catch (e) {
-    process.stderr.write(chalk.red('agent failed: ') + (e as Error).message + '\n');
+    // Item 274: a failure after the money moved is still a result. With --json the partial result is printed —
+    // including the tx hash and where the pending payment was written — instead of a bare "agent failed" line.
+    const msg = (e as Error).message;
+    if (a.json) {
+      const pending = readPending(agentHome(a.home));
+      process.stdout.write(JSON.stringify({
+        success: false, error: msg, steps,
+        identity: loadIdentity(agentHome(a.home)).address,
+        pending_payments: pending, tx_hash: pending[pending.length - 1]?.tx_hash ?? null,
+        pending_file: pendingFile(agentHome(a.home)),
+      }, null, 2) + '\n');
+    }
+    process.stderr.write(chalk.red('agent failed: ') + msg + '\n');
     process.exit(1);
   }
 });
