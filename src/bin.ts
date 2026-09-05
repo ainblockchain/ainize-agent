@@ -119,7 +119,17 @@ cli.command('catalog', 'List the knowledge on sale (LISTED and the older version
   for (const e of items) {
     const status = e.status === 'LISTED' ? chalk.green(e.status.padEnd(10)) : chalk.gray(e.status.padEnd(10));
     const newer = e.superseded_by.length ? chalk.gray(`  newer: ${e.superseded_by.join(', ')}`) : '';
-    process.stdout.write(`${chalk.cyan(e.anchor.id.padEnd(24))} ${status} ${String(e.anchor.rows).padStart(8)} rows  ${e.anchor.price} ${e.anchor.currency}  attest ${e.passed}/${e.quorum}  ${e.anchor.name}${newer}\n`);
+    /**
+     * Item 282 — an agent never opens a page, so this line was the only place it could learn that the 3-credit row
+     * it is about to prefer over a 5-credit one is an ADD-ON: useless on its own, and only priced that way because
+     * the base is bought separately. `base.stack` is the body that needs those tables underneath it; `parents` is a
+     * knowledge that stands alone and shares revenue upward.
+     */
+    const stack = (e.anchor.base?.stack ?? []).map((b) => b.patch_id);
+    const parents = e.anchor.parents ?? [];
+    const built = stack.length ? chalk.yellow(`  add-on, needs: ${stack.join(', ')}`)
+      : parents.length ? chalk.gray(`  built on: ${parents.join(', ')}`) : '';
+    process.stdout.write(`${chalk.cyan(e.anchor.id.padEnd(24))} ${status} ${String(e.anchor.rows).padStart(8)} rows  ${e.anchor.price} ${e.anchor.currency}  attest ${e.passed}/${e.quorum}  ${e.anchor.name}${built}${newer}\n`);
   }
   if (!items.length) process.stdout.write(chalk.gray('(no patches)\n'));
 });
