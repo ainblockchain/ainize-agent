@@ -132,15 +132,42 @@ async function getJson<T>(url: string, init: RequestInit = {}, timeoutMs = 30_00
   return { status: r.status, headers: r.headers, body, text };
 }
 
-export async function askModel(api: string, prompt: string, maxTokens = 8): Promise<string> {
+/** What one completion cost and how long it took — the OpenAI-compatible answer carries `usage`, and it used to be thrown away. */
+export interface ModelUsage { prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null }
+export interface ModelAnswer { text: string; model: string; usage: ModelUsage; elapsed_ms: number }
+
+/**
+ * One completion, with what it cost (design §9). `ask` prices recall in tokens and milliseconds so that N\* — the
+ * break-even between retrieving a fact every time and compiling it once — is computed from measurements instead of
+ * from a constant somebody picked. `askModel` below keeps its exact signature and return type: this is the same
+ * call, reporting what it already knew.
+ */
+export async function askModelDetailed(api: string, prompt: string, maxTokens = 8): Promise<ModelAnswer> {
+  const started = Date.now();
   const models = await getJson<{ data?: { id: string }[] }>(`${api}/v1/models`, {}, 5000);
   const model = models.body?.data?.[0]?.id;
   if (!model) throw new Error(`no model at ${api}`);
-  const r = await getJson<{ choices?: { text: string }[] }>(`${api}/v1/completions`, {
+  const r = await getJson<{ choices?: { text: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }>(`${api}/v1/completions`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, prompt, max_tokens: maxTokens, temperature: 0 }),
   }, 120_000);
   if (r.status !== 200) throw new Error(`completion failed: ${r.status}`);
-  return (r.body?.choices?.[0]?.text ?? '').trim();
+  const u = r.body?.usage;
+  return {
+    text: (r.body?.choices?.[0]?.text ?? '').trim(),
+    model,
+    // Never invented: a server that does not report `usage` leaves nulls, and the token term of N* is then missing
+    // rather than zero — which is what makes `memory --why` able to name what it is short of.
+    usage: {
+      prompt_tokens: typeof u?.prompt_tokens === 'number' ? u.prompt_tokens : null,
+      completion_tokens: typeof u?.completion_tokens === 'number' ? u.completion_tokens : null,
+      total_tokens: typeof u?.total_tokens === 'number' ? u.total_tokens : null,
+    },
+    elapsed_ms: Date.now() - started,
+  };
+}
+
+export async function askModel(api: string, prompt: string, maxTokens = 8): Promise<string> {
+  return (await askModelDetailed(api, prompt, maxTokens)).text;
 }
 
 export async function fetchCatalog(market: string, status = 'LISTED,SUPERSEDED'): Promise<CatalogEntry[]> {
