@@ -13,7 +13,13 @@ import {
   agentBalance, exitCodeFor, fetchCatalog, pendingFile, purchasesFile, readPending, readPurchases, runAgent, spentToday, watchAgent,
   type AgentOptions, type WatchOptions,
 } from './agent.js';
+import { ask, type AskOptions } from './ask.js';
+import { AgentBudget, BudgetRefusal, spendFile, type CapFlags } from './budget.js';
+import { agentLocale, translator } from './i18n.js';
 import { agentHome, loadIdentity } from './identity.js';
+import { AgentMemory, fetchRuntime, runtimeLine } from './memory.js';
+import { loadPlans, planSelfCheck, planShape, shortShape } from './plans.js';
+import { LOOP_STRINGS } from './strings/loop.js';
 
 /**
  * The built-in demo (item 233). These used to be the DEFAULTS of `--question`, `--prompt` and `--expect`, so
@@ -216,6 +222,168 @@ async (a) => {
     process.stderr.write(chalk.red('watch failed: ') + (e as Error).message + '\n');
     process.exit(1);
   }
+});
+
+/**
+ * `ask` — the loop, and the reason this package exists.
+ *
+ *   recall (0 completions to decide) → buy a knowledge that covers it → retrieve it from upstream → ainize it.
+ *
+ * `run` is unchanged and still means "buy this knowledge and measure it against its benchmark". `ask` means "answer
+ * this question as cheaply as you honestly can, and remember what you learn".
+ */
+cli.command('ask <question>', 'Answer a question from memory, or buy / retrieve it — and compile it when repeating costs more than compiling', (y) => y
+  .positional('question', { type: 'string', demandOption: true, describe: 'the question, as a person would ask it' })
+  .option('plan', { type: 'string', array: true, describe: 'restrict retrieval to these plan ids (comma-separated or repeated)' })
+  .option('bake-after', { type: 'number', describe: 'DECLARED policy: compile a shape on its nth lookup. Not a measurement, and labelled as one wherever it appears' })
+  .option('max-churn', { type: 'number', default: 0, describe: 'how much of a shape may have moved between two pulls and still be compiled (0 = none)' })
+  .option('budget-per-day', { type: 'string', describe: 'the most this agent may spend in a day, in the market\'s currency' })
+  .option('queries-per-day', { type: 'string', describe: 'the most upstream MCP calls it may make in a day' })
+  .option('lessons-per-day', { type: 'string', describe: 'the most teach jobs it may spend in a day (the node\'s own limit still applies, and the tighter wins)' })
+  .option('gpu-seconds-per-day', { type: 'string', describe: 'the most GPU seconds it may reserve in a day' })
+  .option('gpu-seconds-per-lesson', { type: 'string', describe: 'the trainer\'s worst case for one lesson; the node does not publish it, so without this a bake refuses rather than holding a number nobody measured' })
+  .option('max-price', { type: 'number', describe: 'refuse any single purchase above this' })
+  .option('api', { type: 'string', describe: 'serving API; default: whatever the market node reports at /api/runtime' })
+  .option('repo', { type: 'string', describe: 'load what it buys into this runtime repo (takes the node\'s lock); omitted = do not touch the model' })
+  // Declared positively so yargs' own negation gives `--no-buy` / `--no-retrieve` / `--no-bake`, the same way
+  // `run --no-follow-latest` already works. Each turns ONE step off without turning the loop off.
+  .option('buy', { type: 'boolean', default: true, describe: '--no-buy: never buy — answer from memory or retrieval only' })
+  .option('retrieve', { type: 'boolean', default: true, describe: '--no-retrieve: never call an upstream server' })
+  .option('bake', { type: 'boolean', default: true, describe: '--no-bake: never spend a lesson, however often the shape repeats' })
+  .option('max-tokens', { type: 'number', default: 16 })
+  .option('pay', { choices: ['auto', 'local-credit', 'ain-transfer'] as const, default: 'auto' })
+  .option('ain-provider', { type: 'string', default: process.env.AIN_PROVIDER_URL ?? 'http://localhost:8081' })
+  .option('private-key', { type: 'string', describe: 'use this key instead of the stored identity' })
+  .example('$0 ask "what is the contract address of USDC?"', 'answer it the cheapest honest way, and remember it')
+  .example('$0 ask "…" --bake-after 3 --lessons-per-day 1 --queries-per-day 20', 'close the loop in one session: the 3rd lookup of a shape compiles it'),
+async (a) => {
+  const caps: CapFlags = {
+    ...(a['budget-per-day'] !== undefined ? { money: a['budget-per-day'] } : {}),
+    ...(a['queries-per-day'] !== undefined ? { queries: a['queries-per-day'] } : {}),
+    ...(a['lessons-per-day'] !== undefined ? { lessons: a['lessons-per-day'] } : {}),
+    ...(a['gpu-seconds-per-day'] !== undefined ? { gpu_s: a['gpu-seconds-per-day'] } : {}),
+  };
+  const opts: AskOptions = {
+    question: String(a.question), market: a.market, home: a.home, caps,
+    buy: a.buy, retrieve: a.retrieve, bake: a.bake,
+    maxChurn: a['max-churn'], maxTokens: a['max-tokens'], pay: a.pay as AskOptions['pay'],
+    ainProvider: a['ain-provider'],
+    ...(a.plan?.length ? { plans: list(a.plan) } : {}),
+    ...(a['bake-after'] !== undefined ? { bakeAfter: a['bake-after'] } : {}),
+    ...(a['max-price'] !== undefined ? { maxPrice: a['max-price'] } : {}),
+    ...(a.api ? { api: a.api } : {}),
+    ...(a.repo ? { repo: a.repo } : {}),
+    ...(a['gpu-seconds-per-lesson'] !== undefined ? { gpuSecondsPerLesson: a['gpu-seconds-per-lesson'] } : {}),
+    ...(a['private-key'] ? { privateKey: a['private-key'] } : {}),
+  };
+  try {
+    const res = await ask(opts, (l) => { if (!a.json) process.stdout.write(l + '\n'); });
+    if (a.json) { process.stdout.write(JSON.stringify(res, null, 2) + '\n'); }
+    else if (res.answer) process.stdout.write('\n' + chalk.green(res.answer) + chalk.gray(`  (via ${res.via})\n`));
+    // 0 answered · 1 no answer · 2 a budget refused and nothing was spent. A refusal is not a crash: an unattended
+    // loop has to be able to tell "I could not afford this" from "I broke".
+    process.exit(res.outcome === 'refused' ? 2 : res.answer ? 0 : 1);
+  } catch (e) {
+    if (e instanceof BudgetRefusal) {
+      if (a.json) process.stdout.write(JSON.stringify({ refused: { kind: e.kind, code: e.code, flag: e.flag, message: e.message, details: e.details } }, null, 2) + '\n');
+      process.stderr.write(chalk.yellow('refused: ') + e.message + '\n');
+      process.exit(2);
+    }
+    if (a.json) process.stdout.write(JSON.stringify({ error: (e as Error).message }, null, 2) + '\n');
+    process.stderr.write(chalk.red('ask failed: ') + (e as Error).message + '\n');
+    process.exit(1);
+  }
+});
+
+/** What this agent knows, what it owns, what it has looked up, and what it would take to compile any of it. */
+cli.command('memory', 'What this agent remembers: facts, knowledge, shapes and the disagreements it recorded', (y) => y
+  .option('shape', { type: 'string', describe: 'one shape (or a prefix of one, or a plan id)' })
+  .option('why', { type: 'string', describe: 'why that shape has (not) been compiled — every gate, with its numbers' })
+  .option('rows', { type: 'number', default: 20, describe: 'how many facts to list' })
+  .option('bake-after', { type: 'number', describe: 'evaluate --why against this declared floor as well' })
+  .option('max-churn', { type: 'number', default: 0 })
+  .option('runtime', { type: 'boolean', default: true, describe: 'also ask the market node what is on the model (--no-runtime keeps it offline)' }),
+async (a) => {
+  const home = agentHome(a.home);
+  const mem = AgentMemory.open(home);
+  const shapeArg = a.why ?? a.shape;
+  const view = mem.view({ ...(shapeArg ? { shape: shapeArg } : {}), rows: a.rows });
+  const runtime = a.runtime ? await fetchRuntime(a.market) : null;
+  let why: unknown = null;
+  if (a.why) {
+    const { shouldBake } = await import('./bake.js');
+    const s = view.shapes[0];
+    if (!s) { process.stderr.write(chalk.yellow(`no shape matches ${a.why} — \`${PROG} memory\` lists the ones this home has\n`)); process.exit(1); }
+    const budget = AgentBudget.open({ home });
+    why = shouldBake(s, { bakeAfter: a['bake-after'] ?? null, maxChurn: a['max-churn'] }, {
+      home,
+      budget: (kind, amount) => {
+        const v = budget.view(kind);
+        if (amount <= 0) return { ok: true, line: '' };
+        if (v.remaining === null) return { ok: false, line: `${v.unit}: no cap set — ${v.flag} would set one` };
+        return { ok: Number(v.remaining) >= amount, line: `${v.unit}: ${amount} needed, ${v.remaining} of ${v.effective_cap} left today` };
+      },
+    });
+  }
+  if (a.json) { process.stdout.write(JSON.stringify({ ...view, runtime, why }, null, 2) + '\n'); return; }
+  process.stdout.write(view.summary + '\n');
+  if (runtime) process.stdout.write(chalk.gray(runtimeLine(runtime) + '\n'));
+  for (const g of view.engrams) {
+    const state = g.state === 'loaded' ? chalk.green('loaded  ') : g.state === 'held' ? chalk.yellow('held    ') : chalk.red('unverif.');
+    process.stdout.write(`  ${state} ${chalk.cyan(g.patch_id.padEnd(24))} ${String(g.rows).padStart(6)} facts  ${g.source}${g.owned ? '' : chalk.gray('  (not this agent\'s)')}\n`);
+  }
+  for (const s of view.shapes) process.stdout.write('  ' + s.line + '\n');
+  for (const c of view.conflicts) process.stdout.write(chalk.yellow(`  ! rule ${c.rule} ${c.what}: agent says ${c.agent_says}; node says ${c.node_says}\n`));
+  if (why) {
+    const d = why as { bake: boolean; gates: { name: string; ok: boolean; detail: Record<string, unknown> }[]; nstar: { n_star: number | null; missing: string[]; terms: { kind: string; why: string; n_star: number | null }[] } };
+    process.stdout.write('\n' + chalk.bold(`would it be compiled? ${d.bake ? 'YES' : 'no'}\n`));
+    for (const g of d.gates) process.stdout.write(`  ${g.ok ? chalk.green('ok  ') : chalk.red('no  ')}${g.name.padEnd(10)} ${JSON.stringify(g.detail)}\n`);
+    for (const term of d.nstar.terms) process.stdout.write(chalk.gray(`  N* in ${term.kind}: ${term.n_star ?? 'not computable'} — ${term.why}\n`));
+    for (const m of d.nstar.missing) process.stdout.write(chalk.yellow(`  missing: ${m}\n`));
+  }
+  for (const r of view.rows) process.stdout.write(chalk.gray(`  ${r.state === 'known' ? ' ' : '?'} ${r.row_key.slice(0, 60)} → ${r.answer.slice(0, 40)}\n`));
+});
+
+/** The four caps, what is left of each, and where each cap came from. Every number is read off a file on disk. */
+cli.command('budget', 'What this agent may spend today, what it has spent, and which flag would change it', (y) => y
+  .option('budget-per-day', { type: 'string' }).option('queries-per-day', { type: 'string' })
+  .option('lessons-per-day', { type: 'string' }).option('gpu-seconds-per-day', { type: 'string' })
+  .option('currency', { type: 'string', describe: 'the currency the money cap is read in (default: the market\'s)' }),
+async (a) => {
+  const home = agentHome(a.home);
+  const caps: CapFlags = {
+    ...(a['budget-per-day'] !== undefined ? { money: a['budget-per-day'] } : {}),
+    ...(a['queries-per-day'] !== undefined ? { queries: a['queries-per-day'] } : {}),
+    ...(a['lessons-per-day'] !== undefined ? { lessons: a['lessons-per-day'] } : {}),
+    ...(a['gpu-seconds-per-day'] !== undefined ? { gpu_s: a['gpu-seconds-per-day'] } : {}),
+  };
+  const budget = AgentBudget.open({ home, flags: caps, ...(a.currency ? { currency: a.currency } : {}) });
+  if (a.json) { process.stdout.write(JSON.stringify({ home, spend_file: spendFile(home), views: budget.views() }, null, 2) + '\n'); return; }
+  process.stdout.write(translator(LOOP_STRINGS, agentLocale())('view.budget.header', { home }) + '\n');
+  for (const line of budget.lines()) process.stdout.write('  ' + line + '\n');
+  process.stdout.write(chalk.gray(`  every number above is read from ${spendFile(home)} and ${purchasesFile(home)}\n`));
+});
+
+/** The declared phrasings this agent can retrieve — and, with --check, whether each plan is sane before it costs a query. */
+cli.command('plans', 'The retrieval plans this agent has: what each asks, and what wording it answers to', (y) => y
+  .option('check', { type: 'boolean', default: false, describe: 'validate every plan (does binding a slot change the shape? is a slot captured and never used?)' }),
+async (a) => {
+  const home = agentHome(a.home);
+  const loaded = loadPlans({ home });
+  const t = translator(LOOP_STRINGS, agentLocale());
+  const checks = a.check ? Object.fromEntries(loaded.plans.map((p) => [p.id, planSelfCheck(p)])) : {};
+  if (a.json) { process.stdout.write(JSON.stringify({ dirs: loaded.dirs, errors: loaded.errors, plans: loaded.plans.map((p) => ({ ...p, shape: planShape(p) })), checks }, null, 2) + '\n'); return; }
+  process.stdout.write(t('view.plans.header', { dir: loaded.dirs.join(', ') }) + '\n');
+  if (!loaded.plans.length) process.stdout.write(chalk.gray(t('view.plans.none', { dir: loaded.dirs.join(', ') }) + '\n'));
+  for (const p of loaded.plans) {
+    process.stdout.write(`${chalk.cyan(p.id.padEnd(30))} ${chalk.gray(shortShape(planShape(p)))}  ${p.server.name} · ${p.tool}\n`);
+    if (p.description) process.stdout.write(chalk.gray(`  ${p.description}\n`));
+    for (const pat of p.match.patterns) process.stdout.write(chalk.gray(`    "${pat}"\n`));
+    for (const f of checks[p.id] ?? []) process.stdout.write(chalk.yellow(`    ! ${f}\n`));
+  }
+  for (const e of loaded.errors) process.stdout.write(chalk.red(`  ${e.file}: ${e.error}\n`));
+  const bad = Object.values(checks).some((f) => f.length);
+  process.exit(loaded.errors.length || bad ? 1 : 0);
 });
 
 cli.command('keys', 'Show (or create) the agent identity', (y) => y.option('reveal', { type: 'boolean', default: false }), async (a) => {
