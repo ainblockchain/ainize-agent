@@ -8,3 +8,6 @@ packages/node/data/
 packages/web/dist/
 .ngram/
 *.tsbuildinfo
+
+# Bench transcripts live in the run's transcripts.tar.zst; score.mjs unpacks it here on first use.
+graph/bench/runs/*/transcripts/
