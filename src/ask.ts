@@ -26,7 +26,7 @@
  */
 import type { CatalogEntry } from '@ngram/core';
 import {
-  askModelDetailed, fetchCatalog, pickPatch, readPurchases, runAgent,
+  askModelDetailed, fetchCatalog, pickPatch, purchasesFile, readPurchases, runAgent,
   type AgentOptions, type AgentResult,
 } from './agent.js';
 import { AgentBudget, BudgetRefusal, type BudgetView, type CapFlags } from './budget.js';
@@ -235,8 +235,23 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
           ...(o.maxPrice !== undefined ? { maxPrice: o.maxPrice } : {}), ...(o.maxTokens !== undefined ? { maxTokens: o.maxTokens } : {}),
           downloadOnly: !o.repo,
         }, (l) => say('    ' + l));
-        cost.money = hold.settle(bought.amount ?? price, bought.tx_hash ?? undefined);
-        cost.currency = currency;
+        /*
+         * Settle what MOVED, not what was quoted.
+         *
+         * `runAgent` reports `owned: true` with the amount and tx hash of the EXISTING receipt when this agent
+         * already holds the knowledge — no 402 is answered and no money leaves. Settling the price there would
+         * spend today's budget on a purchase that did not happen, so asking the same uncovered question twice would
+         * burn the day's allowance while paying nothing. `already_known` is the same: nothing was bought.
+         */
+        const paid = !bought.owned && bought.outcome !== 'already_known';
+        if (paid) {
+          cost.money = hold.settle(bought.amount ?? price, bought.tx_hash ?? undefined);
+          cost.currency = currency;
+        } else {
+          hold.release(bought.owned ? `already owned: ${purchasesFile(home)} has a receipt for ${bought.patch_id ?? pick.anchor.id} and no money moved` : 'the model already answered it; nothing was bought');
+        }
+        // The `buy` event is written whether or not money moved this time: it is what makes the knowledge part of
+        // this agent's memory, and the amount it carries is the receipt's, which is what was ever paid for it.
         memory.recordBuy({
           patch_id: bought.patch_id ?? pick.anchor.id, sha256: bought.sha256 ?? '', amount: bought.amount ?? price,
           currency, tx_hash: bought.tx_hash, seller: bought.seller ?? null, rows_learned: pick.anchor.benchmark.samples?.length ?? 0,
