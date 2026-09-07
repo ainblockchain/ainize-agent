@@ -515,11 +515,15 @@ export function isGraphQLDocument(s: string): boolean {
 export function graphqlSkeleton(doc: string): string {
   let s = doc.replace(/#[^\n]*/g, ' ');
   s = s.replace(/"""[\s\S]*?"""/g, '"$str"');
-  s = s.replace(/"(?:\\.|[^"\\])*"/g, (m) => {
-    let inner = m.slice(1, -1);
-    try { inner = JSON.parse(m) as string; } catch { /* keep the raw inner text */ }
-    return `"${typedPlaceholder(inner)}"`;
-  });
+  /*
+   * A QUOTED literal is a String by GraphQL's own syntax, whatever its characters look like, so it becomes `$str`
+   * and nothing else. Asking `typedPlaceholder` what type it is asked a question the quotes had already answered,
+   * and it answered wrong: measured 2026-09-07 on the SHIPPED plan, `symbol: "USDC"` skeletonized to `"$str"` and
+   * `symbol: "1234"` to `"$int"`, so a ticker made of digits landed on a different shape (c49bda42ddca) from every
+   * other ticker (edd2b734704b) — a second lookup counter, a second row file, and a bake that would train on half
+   * the facts. Which field is being filtered still separates two calls; the field name survives this.
+   */
+  s = s.replace(/"(?:\\.|[^"\\])*"/g, '"$str"');
   s = s.replace(/(^|[^A-Za-z0-9_$."])(-?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)(?![A-Za-z0-9_])/g,
     (_m, pre: string, num: string) => `${pre}${typedPlaceholder(num)}`);
   s = s.replace(/\s+/g, ' ').replace(/\s*([{}()\[\]:,=@!])\s*/g, '$1').trim();
@@ -596,6 +600,31 @@ export const shortShape = (shape: string): string => shape.slice(0, 12);
  * If it does, every entity looked up gets its own counter and the agent will never notice it is repeating itself —
  * so it is a finding, reported against the plan, before a single query is spent.
  */
+/**
+ * Values that a slot's own declaration admits and that a naive skeleton would type differently. One example proves
+ * nothing: the shipped plan's `example` is "USDC", and the counter still split on a ticker made of digits — the
+ * check passed because it only ever tried the one value the plan itself suggested.
+ *
+ * Only values the slot's declared `pattern`, `max_length` and `transform` actually accept are tried, so a finding is
+ * a real question somebody could ask and not a straw man.
+ */
+const SHAPE_PROBES = ['USDC', '1234', '20260907', '2026-09-07', '0.5', '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2', 'a'.repeat(64), 'true'] as const;
+
+function slotsThatMoveTheShape(plan: AgentPlan, examples: Record<string, string>, referenced: Set<string>): string[] {
+  const out: string[] = [];
+  const baseline = shapeOf(bindPlan(plan, examples));
+  for (const name of referenced) {
+    for (const probe of SHAPE_PROBES) {
+      let bound;
+      try { bound = bindPlan(plan, { ...examples, [name]: probe }); } catch { continue; }   // the slot refuses it: not a question
+      if (shapeOf(bound) === baseline) continue;
+      out.push(`{${name}} moves the shape: ${JSON.stringify(examples[name])} and ${JSON.stringify(probe)} are both values this slot accepts and they land on two different counters (${shortShape(baseline)} and ${shortShape(shapeOf(bound))}) — the lookup counter would split and a bake would train on part of the facts`);
+      break;
+    }
+  }
+  return out;
+}
+
 export function planSelfCheck(plan: AgentPlan): string[] {
   const findings: string[] = [];
   const declared = declaredSlots(plan);
@@ -619,6 +648,7 @@ export function planSelfCheck(plan: AgentPlan): string[] {
       }
       const left = [...templateRefs(bound.arguments, true)].filter((n) => declared.has(n));
       if (left.length) findings.push(`the bound call still contains {${left.join('}, {')}}`);
+      findings.push(...slotsThatMoveTheShape(plan, examples, referenced));
     } catch (e) {
       findings.push(`the example slots do not bind: ${(e as Error).message}`);
     }
