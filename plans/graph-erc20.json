@@ -1,0 +1,57 @@
+{
+  "id": "graph/erc20-address-by-symbol",
+  "description": "ERC-20 token identity (contract address, name, decimals) by ticker, from The Graph's hosted Subgraph MCP against Uniswap v3 on Ethereum mainnet. Every field it teaches is immutable — an address, a symbol, a name, a decimals count. A price or a TVL would change every block, and a fact that changes every block is retrieval, not memory. The subgraph is named here rather than searched for because the Subgraph MCP's own ranking signal (get_deployment_30day_query_counts) answered 0 for every candidate when this plan was written, and that server's instructions say to ask rather than guess when volumes cannot decide; naming it also spends one query per question instead of four.",
+  "server": {
+    "name": "subgraph-mcp",
+    "transport": "sse",
+    "url": "https://subgraphs.mcp.thegraph.com/sse",
+    "auth_env": ["GRAPH_API_KEY", "THEGRAPH_GATEWAY_API_KEY"],
+    "timeout_ms": 120000
+  },
+  "tool": "execute_query_by_subgraph_id",
+  "arguments": {
+    "subgraph_id": "5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+    "query": "{ _meta { block { number } } tokens(where: {symbol: \"{symbol}\"}, first: 3, orderBy: txCount, orderDirection: desc) { id symbol name decimals } }"
+  },
+  "mapping": {
+    "path": "data.tokens",
+    "prompt": "What is the {chain} contract address of the {name} ({symbol}) token?",
+    "answer": "{id}",
+    "alt_prompt": "{chain_ko} {name} ({symbol}) 토큰의 컨트랙트 주소는?",
+    "require": ["id", "symbol", "name"],
+    "constants": { "chain": "Ethereum mainnet", "chain_ko": "이더리움 메인넷" },
+    "max_rows": 3
+  },
+  "upstream": {
+    "subgraph_id": "5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+    "network": "ethereum",
+    "protocol": "uniswap-v3"
+  },
+  "upstream_from": { "block": "data._meta.block.number" },
+  "note_fields": ["subgraph_id", "block"],
+  "match": {
+    "patterns": [
+      "what is the contract address of {symbol}",
+      "what is the contract address of the {symbol} token",
+      "what is {symbol}'s contract address",
+      "contract address of {symbol}",
+      "{symbol} contract address",
+      "{symbol} token address",
+      "{symbol} 컨트랙트 주소",
+      "{symbol} 컨트랙트 주소 알려줘",
+      "{symbol} 컨트랙트 주소가 뭐야",
+      "{symbol} 토큰 주소 알려줘",
+      "{symbol} 토큰의 컨트랙트 주소는",
+      "{symbol} 토큰 컨트랙트 주소 알려줘"
+    ],
+    "requires": ["symbol"],
+    "slots": {
+      "symbol": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$",
+        "max_length": 16,
+        "transform": "upper",
+        "example": "USDC"
+      }
+    }
+  }
+}
