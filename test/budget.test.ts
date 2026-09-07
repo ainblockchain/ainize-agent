@@ -16,6 +16,7 @@ import {
   AgentBudget, BUDGET_KINDS, BudgetRefusal, dayKey, loadCaps, readSpend, resetLabel, spendFile, trainerWorstCaseSeconds,
   type SpendRow,
 } from '../src/budget.js';
+import { BUDGET_STRINGS } from '../src/strings/budget.js';
 
 const DAY = 86_400_000;
 /** A fixed clock well inside one UTC day, so nothing here depends on when the suite runs. */
@@ -395,8 +396,8 @@ test('a reservation left open by an earlier run gets its own line, and money say
   ]) appendFileSync(spendFile(h), JSON.stringify(r) + '\n');
   const lines = open(h, { money: 5, queries: 5 }).lines('AIN');
   assert.equal(lines.length, 6);
-  assert.match(lines[1]!, /1 unfinished payment intent\(s\) worth 1 AIN .* are NOT counted here: purchases\.jsonl/);
-  assert.match(lines[3]!, /1 unfinished reservation\(s\) worth 2 upstream queries .* are counted as spent/);
+  assert.match(lines[1]!, /unfinished payment intents from an earlier run: 1, worth 1 AIN .* NOT counted here\. purchases\.jsonl/);
+  assert.match(lines[3]!, /unfinished reservations from an earlier run: 1, worth 2 upstream queries .* counted as spent/);
 });
 
 // ---------------------------------------------------------------- what one lesson costs in GPU seconds
@@ -514,4 +515,21 @@ test('the winner is the earlier LINE, and a reservation that fits is never distu
   refusal(() => a.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' }));
   one.settle(1); two.settle(1);
   assert.equal(new AgentBudget(h, caps, { now: () => T }).view('queries').spent, '2');
+});
+
+// ---------------------------------------------------------------- the two languages, mechanically
+test('every budget line exists in English and Korean, and neither language invents a value the other has not', () => {
+  const slots = (x: string) => [...x.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+  for (const [key, entry] of Object.entries(BUDGET_STRINGS) as [string, { en: string; ko: string }][]) {
+    assert.ok(entry.en.trim(), `${key} has no English`);
+    assert.ok(entry.ko.trim(), `${key} has no Korean`);
+    // …unless the line is nothing but interpolation: `unit_money` is `{currency}`, and a currency's name is its
+    // name in either language.
+    const prose = entry.ko.replace(/\{\w+\}/g, '').trim();
+    if (prose) assert.match(entry.ko, /[가-힣]/, `${key}'s Korean is not written in Korean`);
+    // this CLI has no plural resolver and no josa resolver, so neither convention may appear
+    assert.doesNotMatch(entry.en, /\((s|es)\)/, `${key} uses the "(s)" convention`);
+    assert.doesNotMatch(entry.ko, /[을이가은는와과]\(/, `${key} uses the Korean particle-alternate convention`);
+    assert.deepEqual(slots(entry.ko), slots(entry.en), `${key}'s two languages interpolate different values`);
+  }
 });
