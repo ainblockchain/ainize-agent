@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import {
   McpDataSource, McpDataSourceError, getPath, mapRows, promptKey, sealProvenance, withProvenanceNotes,
   type McpCallResult, type RowProvenance, type TeachRow,
-} from '@ngram/mcp';
+} from '@ngram/mcp/client';
 import { translator, type Locale } from './i18n.js';
 import { RETRIEVE_STRINGS } from './strings/retrieve.js';
 import {
