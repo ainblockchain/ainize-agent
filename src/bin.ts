@@ -29,6 +29,20 @@ import { LOOP_STRINGS } from './strings/loop.js';
  */
 const DEMO = { question: '픽셀플러스 종목코드 알려줘', prompt: '종목코드 픽셀플러스 ', expect: '087600' };
 
+/**
+ * The currency this market prices in, from the public `GET /api/info`. `null` when the node will not say, which is
+ * not a reason to guess one: the caller then falls back to the budget module's own default and the report says which
+ * currency it measured.
+ */
+async function marketCurrency(market: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${market.replace(/\/+$/, '')}/api/info`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { currency?: unknown };
+    return typeof j.currency === 'string' && j.currency ? j.currency : null;
+  } catch { return null; }
+}
+
 /** `a,b` or repeated flags → a clean list. */
 const list = (v: string | string[] | undefined): string[] =>
   (Array.isArray(v) ? v : v ? [v] : []).flatMap((x) => String(x).split(',')).map((x) => x.trim()).filter(Boolean);
@@ -306,9 +320,19 @@ cli.command('memory', 'What this agent remembers: facts, knowledge, shapes and t
 async (a) => {
   const home = agentHome(a.home);
   const mem = AgentMemory.open(home);
+  const runtime = a.runtime ? await fetchRuntime(a.market) : null;
+  /*
+   * Reconcile BEFORE reporting, exactly as `ask` does, or this command prints a residency the node contradicts.
+   *
+   * Measured on 2026-09-07: with the node's `applied` table emptied under it, `memory` went on reporting
+   * "on the model 1" and `loaded` — and with the node listing a DIFFERENT sha256 for the same knowledge, it reported
+   * `loaded` with no rule-3 conflict at all. The report already asked the node what was on the model; it just never
+   * compared the two. `--no-runtime` still keeps it offline, and then it says so instead of guessing.
+   */
+  const reconcile = runtime ? mem.reconcile(runtime, { purchases: readPurchases(home).map((p) => ({ patch_id: p.patch_id, sha256: p.sha256, at: p.at })) }) : null;
+  if (reconcile) mem.flush();
   const shapeArg = a.why ?? a.shape;
   const view = mem.view({ ...(shapeArg ? { shape: shapeArg } : {}), rows: a.rows });
-  const runtime = a.runtime ? await fetchRuntime(a.market) : null;
   let why: unknown = null;
   if (a.why) {
     const { shouldBake } = await import('./bake.js');
@@ -325,9 +349,10 @@ async (a) => {
       },
     });
   }
-  if (a.json) { process.stdout.write(JSON.stringify({ ...view, runtime, why }, null, 2) + '\n'); return; }
+  if (a.json) { process.stdout.write(JSON.stringify({ ...view, runtime, reconcile, why }, null, 2) + '\n'); return; }
   process.stdout.write(view.summary + '\n');
   if (runtime) process.stdout.write(chalk.gray(runtimeLine(runtime) + '\n'));
+  for (const line of reconcile?.lines ?? []) process.stdout.write(chalk.yellow('  ' + line + '\n'));
   for (const g of view.engrams) {
     const state = g.state === 'loaded' ? chalk.green('loaded  ') : g.state === 'held' ? chalk.yellow('held    ') : chalk.red('unverif.');
     process.stdout.write(`  ${state} ${chalk.cyan(g.patch_id.padEnd(24))} ${String(g.rows).padStart(6)} facts  ${g.source}${g.owned ? '' : chalk.gray('  (not this agent\'s)')}\n`);
@@ -357,7 +382,14 @@ async (a) => {
     ...(a['lessons-per-day'] !== undefined ? { lessons: a['lessons-per-day'] } : {}),
     ...(a['gpu-seconds-per-day'] !== undefined ? { gpu_s: a['gpu-seconds-per-day'] } : {}),
   };
-  const budget = AgentBudget.open({ home, flags: caps, ...(a.currency ? { currency: a.currency } : {}) });
+  /*
+   * "default: the market's" was documented on --currency and implemented nowhere, so on a CREDIT market this report
+   * measured against AIN and answered "0 spent" for a day the agent had paid 0.5 CREDIT. The node publishes it on
+   * the public `GET /api/info`; a node that will not answer leaves the module default, and the extra line under
+   * "money" names anything paid today in a currency this cap does not measure either way.
+   */
+  const currency = a.currency ?? await marketCurrency(a.market);
+  const budget = AgentBudget.open({ home, flags: caps, ...(currency ? { currency } : {}) });
   if (a.json) { process.stdout.write(JSON.stringify({ home, spend_file: spendFile(home), views: budget.views() }, null, 2) + '\n'); return; }
   process.stdout.write(translator(LOOP_STRINGS, agentLocale())('view.budget.header', { home }) + '\n');
   for (const line of budget.lines()) process.stdout.write('  ' + line + '\n');
