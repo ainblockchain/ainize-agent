@@ -175,6 +175,81 @@ function appendRetrieved(home: string, shape: string, rows: TeachRow[], provenan
   return { rows_file: files.rows, provenance_file: files.provenance };
 }
 
+/**
+ * Every retrieval of one shape, folded into ONE record for the lesson that will be baked from them.
+ *
+ * `<shape>.provenance.jsonl` is JSONL — one sealed record per upstream call — and a shape only reaches the material
+ * gate after several of them. `bake.ts` read it with a bare `JSON.parse` of the whole file, which throws on the
+ * second line, so for every shape that could actually be baked the provenance was swallowed by an empty catch and
+ * the lesson was submitted with none (measured 2026-09-07: an 8-call shape, 8 lines, `Unexpected non-whitespace
+ * character after JSON at position 1100`).
+ *
+ * The fold states only what is true of ALL the calls: the server and the tool are in the shape key, so there cannot
+ * be two of them; an upstream field two calls disagreed about is DROPPED rather than averaged, because a lesson made
+ * at two different blocks was not made at either of them.
+ */
+export interface ShapeProvenance {
+  source: 'mcp';
+  shape: string;
+  plan_id: string | null;
+  server: RowProvenance['server'] | null;
+  tool: string | null;
+  /** Only the pins every call agreed on. A field they disagreed about is in `upstream_varied` instead. */
+  upstream: Record<string, string | number | boolean | null>;
+  upstream_varied: string[];
+  calls: number;
+  first_fetched_at: number | null;
+  last_fetched_at: number | null;
+  rows: number;
+  retrievals: { slots: Record<string, string>; arguments_sha256: string; fetched_at: number; upstream: Record<string, unknown>; rows_sha256: string; rows: number }[];
+  retrievals_omitted: number;
+  unreadable: number;
+}
+
+/** At most this many calls are quoted one by one; the counts and the agreed pins still cover all of them. */
+export const PROVENANCE_CALLS_KEPT = 200;
+
+export function provenanceForShape(home: string, shape: string): ShapeProvenance | null {
+  const file = shapeFiles(home, shape).provenance;
+  if (!existsSync(file)) return null;
+  const out: ShapeProvenance = {
+    source: 'mcp', shape, plan_id: null, server: null, tool: null, upstream: {}, upstream_varied: [],
+    calls: 0, first_fetched_at: null, last_fetched_at: null, rows: 0, retrievals: [], retrievals_omitted: 0, unreadable: 0,
+  };
+  let first = true;
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    let rec: { plan_id?: string; slots?: Record<string, string>; at?: number; provenance?: RowProvenance };
+    try { rec = JSON.parse(line) as typeof rec; } catch { out.unreadable += 1; continue; }
+    const p = rec.provenance;
+    if (!p || typeof p !== 'object') { out.unreadable += 1; continue; }
+    out.calls += 1;
+    out.rows += p.rows ?? 0;
+    out.plan_id ??= rec.plan_id ?? null;
+    out.server ??= p.server ?? null;
+    out.tool ??= p.tool ?? null;
+    const at = p.fetched_at ?? rec.at ?? null;
+    if (at !== null) {
+      out.first_fetched_at = out.first_fetched_at === null ? at : Math.min(out.first_fetched_at, at);
+      out.last_fetched_at = out.last_fetched_at === null ? at : Math.max(out.last_fetched_at, at);
+    }
+    const up = p.upstream ?? {};
+    if (first) { out.upstream = { ...up }; first = false; } else {
+      for (const k of Object.keys(out.upstream)) {
+        if (!(k in up) || up[k] !== out.upstream[k]) { delete out.upstream[k]; if (!out.upstream_varied.includes(k)) out.upstream_varied.push(k); }
+      }
+      for (const k of Object.keys(up)) if (!(k in out.upstream) && !out.upstream_varied.includes(k)) out.upstream_varied.push(k);
+    }
+    if (out.retrievals.length < PROVENANCE_CALLS_KEPT) {
+      out.retrievals.push({
+        slots: rec.slots ?? {}, arguments_sha256: p.arguments_sha256, fetched_at: at ?? 0,
+        upstream: up, rows_sha256: p.rows_sha256, rows: p.rows ?? 0,
+      });
+    } else out.retrievals_omitted += 1;
+  }
+  return out.calls ? out : null;
+}
+
 export interface ShapeDataset {
   rows: TeachRow[];
   /** Lines read, before de-duplication. */

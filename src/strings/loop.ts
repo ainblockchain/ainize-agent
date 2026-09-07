@@ -110,6 +110,18 @@ export const LOOP_STRINGS: Dict = {
     en: 'this node runs NGRAM_TEACH_BACKEND=stub: the lesson record, the dataset and the state machine are real, and the knowledge file is a fixture that trains no weights. Nothing here measures a model.',
     ko: '이 노드는 NGRAM_TEACH_BACKEND=stub 으로 동작합니다: 학습 작업 기록과 데이터셋, 상태 전이는 실제이지만 결과 파일은 가중치를 학습하지 않은 고정 샘플입니다. 여기서 나온 값으로 모델을 평가할 수 없습니다.',
   },
+  /**
+   * The `--description` the publish command carries. It is a value that becomes a permanent public record, so it says
+   * only what was measured — the server, the tool, the number of calls, the days, and the pins every call agreed on.
+   * `{pins}` and `{varied}` arrive already assembled and are empty when there is nothing to say.
+   */
+  'bake.provenance.description': {
+    en: '{rows} facts retrieved by an Ainize agent from {server}{tool} over {calls} upstream calls {when}{pins}{varied} · each row carries the call it came from in its own note.',
+    ko: '{server}{tool} 에서 상위 호출 {calls} 회로 Ainize 에이전트가 수집한 사실 {rows} 건 {when}{pins}{varied} · 각 행의 note 에 그 사실을 가져온 호출이 적혀 있습니다.',
+  },
+  'bake.provenance.on': { en: '(retrieved {day})', ko: '(수집 시점 {day})' },
+  'bake.provenance.between': { en: '(retrieved between {from} and {to})', ko: '(수집 시점 {from} ~ {to})' },
+  'bake.provenance.varied': { en: ' · varied across calls: {fields}', ko: ' · 호출마다 달랐던 항목: {fields}' },
   'bake.autoNeverPublishes': {
     en: 'the loop does not publish. Publishing writes an anchor nobody can recall, and the rows came from somebody else\'s data through a gateway key — that is the owner\'s decision, and it is one command: {command}',
     ko: '자동 루프는 공개하지 않습니다. 공개는 되돌릴 수 없는 앵커를 남기고, 사용한 데이터도 게이트웨이 키를 통해 받은 남의 데이터입니다 — 공개 여부는 소유자가 정하며, 명령 한 줄이면 됩니다: {command}',

@@ -5,11 +5,13 @@
  * spending — the part that has to be right BEFORE a non-refundable lesson and a block of GPU time are committed.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { BAKE_DONE_STATUSES, ETA_MIN_SAMPLES, ROWS_FLOOR_GRADIENT, bakeCosts, nStar, shouldBake } from '../src/bake.js';
+import { BAKE_DONE_STATUSES, ETA_MIN_SAMPLES, ROWS_FLOOR_GRADIENT, bakeCosts, nStar, provenanceSentence, publishCommand, shouldBake } from '../src/bake.js';
+import { provenanceForShape, shapeFiles } from '../src/retrieve.js';
+import { LOOP_STRINGS } from '../src/strings/loop.js';
 import { memoryFile, type MemoryShapeView } from '../src/memory.js';
 
 const homes: string[] = [];
@@ -170,4 +172,107 @@ test('every gate is evaluated, so one command can print every reason at once', (
   assert.equal(d.gates.length, 4);
   assert.deepEqual(d.gates.map((g) => [g.name, g.ok]), [['economic', false], ['material', false], ['stability', false], ['budget', true]]);
   for (const g of d.gates) if (!g.ok) assert.ok(g.refusal, `${g.name} failed with no sentence`);
+});
+
+// ------------------------------------------------------------------ where the rows came from
+
+const SHAPE = 'e'.repeat(64);
+
+/** Two calls of one shape, as `retrieve.ts` really appends them: one JSON object per LINE. */
+function twoCalls(h: string, secondBlock = 20000000): void {
+  const f = shapeFiles(h, SHAPE).provenance;
+  mkdirSync(join(h, 'retrieved'), { recursive: true });
+  const rec = (symbol: string, block: number, at: number) => JSON.stringify({
+    plan_id: 'graph/erc20-address-by-symbol', slots: { symbol }, at, shape: SHAPE,
+    provenance: {
+      source: 'mcp', server: { name: 'subgraph-mcp', transport: 'sse', authenticated: true }, tool: 'execute_query_by_subgraph_id',
+      arguments: { symbol }, arguments_sha256: `${symbol}-args`, fetched_at: at,
+      upstream: { subgraph_id: '5zvR82', network: 'ethereum', block },
+      row_hashes: ['h'], rows_sha256: `${symbol}-rows`, rows: 1,
+    },
+  }) + '\n';
+  appendFileSync(f, rec('USDC', 20000000, Date.UTC(2026, 8, 7, 3)));
+  appendFileSync(f, rec('WETH', secondBlock, Date.UTC(2026, 8, 8, 3)));
+}
+
+test('the provenance of a lesson is read a LINE at a time — a whole-file JSON.parse dropped it for every bakeable shape', () => {
+  const h = home();
+  twoCalls(h);
+  // What the code used to do, and what it did on a real 8-call shape on 2026-09-07:
+  assert.throws(() => JSON.parse(require('node:fs').readFileSync(shapeFiles(h, SHAPE).provenance, 'utf8')));
+  const p = provenanceForShape(h, SHAPE)!;
+  assert.equal(p.calls, 2);
+  assert.equal(p.rows, 2);
+  assert.equal(p.plan_id, 'graph/erc20-address-by-symbol');
+  assert.equal(p.tool, 'execute_query_by_subgraph_id');
+  assert.equal(p.retrievals.length, 2);
+  assert.equal(p.unreadable, 0);
+});
+
+test('a pin two calls disagreed about is dropped, not averaged — a lesson made at two blocks was made at neither', () => {
+  const h = home();
+  twoCalls(h, 20000999);
+  const p = provenanceForShape(h, SHAPE)!;
+  assert.equal(p.upstream.subgraph_id, '5zvR82');
+  assert.equal(p.upstream.network, 'ethereum');
+  assert.equal(p.upstream.block, undefined);
+  assert.deepEqual(p.upstream_varied, ['block']);
+  assert.match(provenanceSentence(p, 'en'), /varied across calls: block/);
+});
+
+test('the publish command a person is handed declares where the questions came from', () => {
+  const h = home();
+  twoCalls(h);
+  const p = provenanceForShape(h, SHAPE)!;
+  const cmd = publishCommand('job-1', p, 'en');
+  // authenticated: somebody's key opened that connection, so the rows are licensed to this agent, not its own work
+  assert.match(cmd, / --declare licensed /);
+  assert.match(cmd, / --access derivative /);
+  assert.match(cmd, /--description "2 facts retrieved by an Ainize agent from subgraph-mcp/);
+  assert.match(cmd, /subgraph_id 5zvR82/);
+  assert.match(cmd, /--consent-permanent --consent-rights$/);
+  // an anonymous connection is a public source, and it is a measured difference rather than a judgement
+  p.server!.authenticated = false;
+  assert.match(publishCommand('job-1', p, 'en'), / --declare public /);
+  // with nothing measured there is nothing to declare, and the command says nothing rather than guessing
+  assert.equal(publishCommand('job-1', undefined, 'en'), 'ainize teach publish job-1 --name "<name>" --price <n> --consent-permanent --consent-rights');
+});
+
+test('the description a buyer will read exists in both languages, with the same values in each', () => {
+  const h = home();
+  twoCalls(h);
+  const p = provenanceForShape(h, SHAPE)!;
+  const en = provenanceSentence(p, 'en');
+  const ko = provenanceSentence(p, 'ko');
+  assert.match(ko, /[가-힣]/);
+  assert.doesNotMatch(ko, /retrieved by an Ainize agent/);
+  for (const s of [en, ko]) {
+    assert.match(s, /subgraph-mcp/);
+    assert.match(s, /5zvR82/);
+    assert.match(s, /\b2\b/);
+  }
+  for (const key of ['bake.provenance.description', 'bake.provenance.on', 'bake.provenance.between', 'bake.provenance.varied'] as const) {
+    const e = LOOP_STRINGS[key];
+    const slots = (x: string) => [...x.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+    assert.deepEqual(slots(e.ko), slots(e.en), `${key}'s two languages interpolate different values`);
+    assert.match(e.ko, /[가-힣]/, `${key}'s Korean is not written in Korean`);
+  }
+});
+
+test('a shell metacharacter in a description cannot break out of the command', () => {
+  const h = home();
+  const f = shapeFiles(h, SHAPE).provenance;
+  mkdirSync(join(h, 'retrieved'), { recursive: true });
+  appendFileSync(f, JSON.stringify({
+    plan_id: 'p', slots: {}, at: 1, shape: SHAPE,
+    provenance: {
+      source: 'mcp', server: { name: 'evil"; rm -rf /; echo "', transport: 'sse', authenticated: false },
+      tool: 't', arguments: {}, arguments_sha256: 'a', fetched_at: 1, upstream: {}, row_hashes: [], rows_sha256: 'r', rows: 1,
+    },
+  }) + '\n');
+  const cmd = publishCommand('job-1', provenanceForShape(h, SHAPE)!, 'en');
+  const desc = /--description "((?:[^"\\]|\\.)*)"/.exec(cmd);
+  assert.ok(desc, `no quoted description in: ${cmd}`);
+  assert.match(cmd, /\\"; rm -rf \/; echo \\"/);
+  assert.equal(cmd.split('--consent-permanent').length, 2);
 });

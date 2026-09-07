@@ -32,7 +32,7 @@ import { agentLocale, translator, type Locale } from './i18n.js';
 import { loadIdentity } from './identity.js';
 import { memoryFile, type AgentMemory, type BakePayload, type MemoryEvent, type MemoryShapeView } from './memory.js';
 // Also type-only at load time: `retrieve.ts` imports the MCP client, and this module is on `ask`'s hot path.
-import type { ShapeDataset } from './retrieve.js';
+import type { ShapeDataset, ShapeProvenance } from './retrieve.js';
 import { LOOP_STRINGS } from './strings/loop.js';
 
 /**
@@ -372,7 +372,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
   const short = o.shape.slice(0, 12);
   const identity = loadIdentity(o.home, o.privateKey);
   const { Context, loadConfig, runTeachLesson } = await import('@ngram/mcp/client');
-  const { datasetForShape, shapeFiles } = await import('./retrieve.js');
+  const { datasetForShape, provenanceForShape } = await import('./retrieve.js');
 
   const ds: ShapeDataset = datasetForShape(o.home, o.shape);
   if (!ds.rows.length) {
@@ -452,9 +452,15 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
     throw e;
   }
 
-  const provFile = shapeFiles(o.home, o.shape).provenance;
-  let provenance: Record<string, unknown> | undefined;
-  try { provenance = JSON.parse(readFileSync(provFile, 'utf8')) as Record<string, unknown>; } catch { provenance = undefined; }
+  /*
+   * Every call this lesson is made of, folded into one record.
+   *
+   * This used to be `JSON.parse(readFileSync(<shape>.provenance.jsonl))` inside an empty catch. That file is JSONL,
+   * and a shape only reaches the material gate after several calls, so the parse threw on line 2 for every shape
+   * that could actually be baked and the lesson went up with no provenance at all — silently. `provenanceForShape`
+   * reads it a line at a time and states only what is true of all of them.
+   */
+  const provenance = provenanceForShape(o.home, o.shape) ?? undefined;
 
   log(t('bake.submitting', { shape: short, rows: ds.rows.length, market: o.market, backend: backend ?? 'unknown', gpu_s: gpuSeconds }));
   const t0 = now();
@@ -469,7 +475,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
       retention: 'keep',
       effort: o.effort ?? 'balanced',
       ...(noModel ? { skip_preflight: true } : {}),
-      ...(provenance ? { provenance } : {}),
+      ...(provenance ? { provenance: { ...provenance } as unknown as Record<string, unknown> } : {}),
     }, {
       signal: controller.signal,
       onState: (ev) => {
@@ -506,7 +512,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
       status: view.native_state, rows: ds.rows.length, total_s, npz_sha256: view.knowledge_file?.sha256 ?? null,
       ...(view.draft_id ? { patch_id: view.draft_id } : {}),
     });
-    const publish = `ainize teach publish ${view.node_job_id} --name "<name>" --price <n> --consent-permanent --consent-rights`;
+    const publish = publishCommand(view.node_job_id, provenance, locale);
     log(t('bake.done', { job: view.node_job_id, state: view.native_state, total_s: String(total_s) }));
     log(t('bake.autoNeverPublishes', { command: publish }));
     return {
@@ -540,4 +546,49 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
       simulated: backend === 'stub', preflight: noModel ? 'skipped_no_model' : 'ran', publish_command: '', view: null, error: msg,
     };
   }
+}
+
+
+// ------------------------------------------------------------------------------------------------ the one command
+
+/** Shell-safe double quoting for a value that goes into a command line a person will paste. */
+const q = (v: string): string => `"${v.replace(/["\\$`]/g, '\\$&').replace(/\s+/g, ' ').trim()}"`;
+
+/**
+ * One or two sentences saying where the questions came from, built from what was actually measured — the server, the
+ * tool, how many calls, when, and the pins every one of them agreed on. Nothing here is inferred from a name.
+ */
+export function provenanceSentence(p: ShapeProvenance, locale: Locale = agentLocale()): string {
+  const tt = translator(LOOP_STRINGS, locale);
+  const day = (ms: number | null): string | null => (ms ? new Date(ms).toISOString().slice(0, 10) : null);
+  const from = day(p.first_fetched_at);
+  const to = day(p.last_fetched_at);
+  const pins = Object.entries(p.upstream).map(([k, v]) => `${k} ${String(v)}`).join(', ');
+  return tt('bake.provenance.description', {
+    rows: p.rows,
+    server: p.server?.name ?? 'MCP',
+    tool: p.tool ? ` (${p.tool})` : '',
+    calls: p.calls,
+    when: from ? (to && to !== from ? tt('bake.provenance.between', { from, to }) : tt('bake.provenance.on', { day: from })) : '',
+    pins: pins ? ` · ${pins}` : '',
+    varied: p.upstream_varied.length ? tt('bake.provenance.varied', { fields: p.upstream_varied.join(', ') }) : '',
+  });
+}
+
+/**
+ * The command a PERSON runs to publish what the agent baked — the loop never runs it.
+ *
+ * It carries the declaration and the description because the agent is the only party that knows them: the rows came
+ * out of somebody else's server, and a publish that says nothing about that sells them as if they were this agent's
+ * own work. `--declare` is `licensed` when the connection was authenticated with somebody's key and `public` when it
+ * was anonymous — a measured difference, not a judgement. `--access` is named rather than defaulted, because who may
+ * read the training set is exactly the decision that should not happen by omission.
+ */
+export function publishCommand(jobId: string, p?: ShapeProvenance, locale: Locale = agentLocale()): string {
+  const parts = [`ainize teach publish ${jobId}`, '--name "<name>"', '--price <n>'];
+  if (p) {
+    parts.push(`--declare ${p.server?.authenticated ? 'licensed' : 'public'}`, '--access derivative', `--description ${q(provenanceSentence(p, locale))}`);
+  }
+  parts.push('--consent-permanent', '--consent-rights');
+  return parts.join(' ');
 }
