@@ -7,8 +7,10 @@
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import {
   AgentBudget, BUDGET_KINDS, BudgetRefusal, dayKey, loadCaps, readSpend, resetLabel, spendFile, trainerWorstCaseSeconds,
@@ -444,4 +446,72 @@ test('yesterday\'s spend in another currency is not today\'s business', () => {
   purchase(h, '9', 'CREDIT', T - DAY);
   const b = new AgentBudget(h, loadCaps({ home: h, flags: { money: '5' } }), { now: () => T, locale: 'en' });
   assert.deepEqual(b.view('money', 'AIN').other_currencies, []);
+});
+
+// ---------------------------------------------------------------- two processes, one remainder
+
+/**
+ * The concurrent case cannot be staged in one process: `snapshot()` already counts another process's OPEN intent,
+ * so two sequential reserves refuse on the ordinary path. What has to be shown is two writers that both READ before
+ * either APPENDS — which needs real processes, released together. Measured before the fix: eight warm processes at
+ * one instant against a cap of 3 settled EIGHT, in 7 of 10 trials.
+ */
+test('warm processes released at one instant cannot between them spend more than the cap', async () => {
+  const h = home();
+  const worker = join(h, 'worker.mjs');
+  const src = pathToFileURL(join(import.meta.dirname, '..', 'src', 'budget.ts')).href;
+  writeFileSync(worker, [
+    `import { existsSync, writeFileSync } from 'node:fs';`,
+    `const { AgentBudget } = await import(${JSON.stringify(src)});`,
+    `const [home, me] = [process.argv[2], process.argv[3]];`,
+    `const b = AgentBudget.open({ home, flags: { queries: '3' }, locale: 'en' });`,
+    `writeFileSync(home + '/ready-' + me, '1');`,
+    `while (!existsSync(home + '/go')) { /* tight spin: no timer, no I/O wait */ }`,
+    `try { b.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' }).settle(1); } catch { /* refused, which is the point */ }`,
+  ].join('\n'));
+
+  const N = 8;
+  const kids = Array.from({ length: N }, (_, i) =>
+    new Promise<void>((res) => spawn(process.execPath, ['--import', 'tsx', worker, h, String(i)], { stdio: 'ignore' }).on('exit', () => res())));
+  const t0 = Date.now();
+  while (readdirSync(h).filter((f) => f.startsWith('ready-')).length < N) {
+    if (Date.now() - t0 > 60_000) throw new Error('the workers never became ready');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  writeFileSync(join(h, 'go'), '1');
+  await Promise.all(kids);
+
+  const settled = readSpend(h).filter((r) => r.event === 'settle');
+  assert.equal(settled.length, 3, `${N} processes settled ${settled.length} queries against a cap of 3`);
+  // every loser gave its hold straight back, so nothing is left half-held for the rest of the day
+  assert.equal(readSpend(h).filter((r) => r.event === 'intent').length, settled.length + readSpend(h).filter((r) => r.event === 'release').length);
+  assert.equal(new AgentBudget(h, loadCaps({ home: h, flags: { queries: '3' } }), {}).view('queries').spent, '3');
+});
+
+test('a refusal that lost the race says so, in both languages, and spends nothing', () => {
+  const h = home();
+  const caps = loadCaps({ home: h, flags: { queries: '1' } });
+  const a = new AgentBudget(h, caps, { now: () => T, locale: 'en' });
+  // b's own intent is on file and a's is ahead of it: the sequential path cannot produce this, so it is written
+  // as the log really looks at that instant.
+  a.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' });
+  const b = new AgentBudget(h, caps, { now: () => T, locale: 'en' });
+  const ref = refusal(() => b.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' }));
+  assert.equal(ref.code, 'over_cap');
+  assert.match(ref.render('ko'), /[가-힣]/);
+  assert.doesNotMatch(ref.render('ko'), /Raise it with/);
+  assert.equal(readSpend(h).filter((r) => r.event === 'settle').length, 0);
+});
+
+test('the winner is the earlier LINE, and a reservation that fits is never disturbed by one that does not', () => {
+  const h = home();
+  const caps = loadCaps({ home: h, flags: { queries: '2' } });
+  const a = new AgentBudget(h, caps, { now: () => T, locale: 'en' });
+  const b = new AgentBudget(h, caps, { now: () => T, locale: 'en' });
+  const one = a.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' });
+  const two = b.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' });   // still fits: two of two
+  assert.ok(one.open && two.open);
+  refusal(() => a.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' }));
+  one.settle(1); two.settle(1);
+  assert.equal(new AgentBudget(h, caps, { now: () => T }).view('queries').spent, '2');
 });

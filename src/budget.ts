@@ -369,6 +369,43 @@ export class AgentBudget {
     return snap.settled[kind] + snap.unresolved[kind].amount;
   }
 
+  /**
+   * Did this reservation really fit, given every line that was appended BEFORE it?
+   *
+   * `reserve()` reads the ledger and then appends — two operations, not one — so two processes can both read "0
+   * spent" and both append an intent. Measured 2026-09-07: eight warm processes released at the same instant
+   * against a cap of 3 upstream queries settled EIGHT of them, in 7 of 10 trials. The in-process `holds` map cannot
+   * see another process, and "a budget it cannot exceed" is the whole promise a `watch` loop beside an `ask` is
+   * left running on.
+   *
+   * The fix is the log itself. `O_APPEND` gives every writer the same total order, so after appending its own
+   * intent a process re-reads the file and asks whether it still fits with only the lines AHEAD of its own line
+   * counted. The earlier line wins, every process agrees on which that is, and the loser gives its hold back. No
+   * lock file, no second source of truth, and a crash between the two leaves an ordinary unfinished intent.
+   */
+  private winsInFileOrder(id: string, kind: BudgetKind, want: bigint, currency: string): { ok: boolean; ahead: bigint; cap: bigint } | null {
+    const eff = this.effectiveBig(kind);
+    if (!eff) return null;
+    const start = dayStart(this.now);
+    const end = start + 86_400_000;
+    // Money's authority is purchases.jsonl; an OPEN money intent ahead of ours has not landed there yet, so it is
+    // added, and a SETTLED one already has, so it is not.
+    let used = kind === 'money' ? this.spentBig('money', zeroSnapshot(), currency) : 0n;
+    const open = new Map<string, bigint>();
+    const sum = (): bigint => { let n = 0n; for (const v of open.values()) n += v; return n; };
+    for (const r of readSpend(this.home)) {
+      if (r.kind !== kind || r.at < start || r.at >= end) continue;
+      if (r.event === 'intent' && r.id === id) {
+        const ahead = used + sum();
+        return { ok: want <= eff.cap - ahead, ahead, cap: eff.cap };
+      }
+      if (r.event === 'intent') { try { open.set(r.id, parseAmount(r.amount)); } catch { /* unreadable */ } continue; }
+      if (r.event === 'settle') { open.delete(r.id); if (kind !== 'money') { try { used += parseAmount(r.amount); } catch { /* unreadable */ } } continue; }
+      if (r.event === 'release') open.delete(r.id);
+    }
+    return null;   // our own line is not on file — never refuse on evidence that is missing
+  }
+
   private reservedBig(kind: BudgetKind): bigint {
     let n = 0n;
     for (const h of this.holds.values()) if (h.kind === kind) n += h.amount;
@@ -533,6 +570,22 @@ export class AgentBudget {
     const id = newId();
     this.record({ id, kind, event: 'intent', amount: wantStr, act, ref: req.ref, note: req.note, currency: kind === 'money' ? currency : undefined });
     this.holds.set(id, { kind, amount: want });
+
+    // …and then ask the log, which is the only thing both processes agree on, whether this line really fit.
+    const won = this.winsInFileOrder(id, kind, want, currency);
+    if (won && !won.ok) {
+      this.holds.delete(id);
+      this.record({ id, kind, event: 'release', amount: wantStr, act, ref: req.ref, currency: kind === 'money' ? currency : undefined, reason: 'another process on this home took the last of today\'s allowance first' });
+      const v = this.view(kind, currency);
+      this.record({ kind, event: 'refused', amount: wantStr, act, ref: req.ref, currency: kind === 'money' ? currency : undefined, reason: 'over_cap', id: newId() });
+      throw this.refuse('over_cap', kind, BUDGET_FLAG[kind], {
+        needed: wantStr, cap: formatAmount(won.cap), spent: formatAmount(won.ahead), reserved: v.reserved,
+        remaining: formatAmount(won.cap - won.ahead), act, resets_at: v.resets_at, concurrent: true,
+      }, 'refuse_concurrent', {
+        act, needed: wantStr, cap: formatAmount(won.cap), ahead: formatAmount(won.ahead),
+        flag: BUDGET_FLAG[kind], resets: resetLabel(v.resets_at),
+      }, currency);
+    }
 
     const self = this;
     return {

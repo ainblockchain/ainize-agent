@@ -64,6 +64,11 @@ export const BUDGET_STRINGS = {
    * Money spent today in a currency the report was not asked about. Without it, `agent budget` on a CREDIT market
    * with the default AIN denomination answered "0 spent" for a day the agent had paid 0.5 CREDIT.
    */
+  /** Lost the last of the allowance to another process writing to the same home a moment earlier. */
+  refuse_concurrent: {
+    en: 'No {unit} left for {act}: another process on this home took the last of today\'s allowance a moment before this one. It needs {needed} and {ahead} of the cap {cap} was already claimed ahead of it. Nothing was spent here. Raise it with {flag} and run again, or run one agent at a time. The day rolls over at {resets}.',
+    ko: '{act} 에 쓸 {unit} 가 없습니다: 같은 홈의 다른 프로세스가 조금 먼저 오늘 남은 몫을 가져갔습니다. 필요한 양은 {needed} 이고, 한도 {cap} 중 {ahead} 가 이미 앞서 확보되었습니다. 여기서 지출한 것은 없습니다. {flag} 로 한도를 올리고 다시 실행하거나, 에이전트를 하나씩 실행하십시오. 하루 기준은 {resets} 에 바뀝니다.',
+  },
   line_other_currency: {
     en: '  …and {amount} {currency} was paid today in another currency (purchases.jsonl). The cap above is per currency; pass --currency {currency} to measure against that one.',
     ko: '  …그리고 오늘 다른 통화로 {currency} {amount} 를 지불했습니다 (purchases.jsonl). 위 한도는 통화별로 적용되며, 그 통화 기준으로 보려면 --currency {currency} 를 쓰십시오.',
