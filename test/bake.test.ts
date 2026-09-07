@@ -12,7 +12,7 @@ import test from 'node:test';
 import { BAKE_DONE_STATUSES, ETA_MIN_SAMPLES, ROWS_FLOOR_GRADIENT, bakeCosts, nStar, provenanceSentence, publishCommand, shouldBake } from '../src/bake.js';
 import { provenanceForShape, shapeFiles } from '../src/retrieve.js';
 import { LOOP_STRINGS } from '../src/strings/loop.js';
-import { memoryFile, type MemoryShapeView } from '../src/memory.js';
+import { LESSON_TERMINAL, emptyIndex, fold, memoryFile, type MemoryShapeView } from '../src/memory.js';
 
 const homes: string[] = [];
 const home = (): string => { const h = mkdtempSync(join(tmpdir(), 'ainize-bake-')); homes.push(h); return h; };
@@ -93,6 +93,24 @@ test('the statuses that count as a finished lesson are the node\'s own, and they
   assert.deepEqual([...BAKE_DONE_STATUSES].sort(), [...done].sort());
   assert.ok(BAKE_DONE_STATUSES.includes('READY' as never));
   assert.ok(!(BAKE_DONE_STATUSES as readonly string[]).includes('FAILED'));
+  // …and memory's own list is the node's whole terminal set: a FAILED lesson finished, and the shape's counter has
+  // to say so even though its seconds are not a price.
+  assert.deepEqual([...LESSON_TERMINAL].sort(), [...TEACH_TERMINAL].sort());
+  for (const s of BAKE_DONE_STATUSES) assert.ok((LESSON_TERMINAL as readonly string[]).includes(s), `${s} is a success but not terminal`);
+});
+
+test('a lesson that finished increments the shape\'s bake counter — READY is the node\'s word, not DONE', () => {
+  // Measured 2026-09-07: a baked engram sat in memory as `held` while the shape it came from reported `bakes 0`,
+  // because `fold` keyed on 'DONE', which the node never writes.
+  const ix = emptyIndex();
+  fold(ix, { v: 1, at: 1, kind: 'bake', shape: 'sh', dataset_id: null, dataset_sha256: null, job_id: 'j1', backend: 'stub', status: 'QUEUED', rows: 8, total_s: null, npz_sha256: null });
+  assert.equal(ix.shapes.sh.bake.n, 0, 'a queued lesson has not finished');
+  fold(ix, { v: 1, at: 2, kind: 'bake', shape: 'sh', dataset_id: 'd', dataset_sha256: null, job_id: 'j1', backend: 'stub', status: 'READY', rows: 8, total_s: 6.1, npz_sha256: 'x' });
+  assert.equal(ix.shapes.sh.bake.n, 1);
+  assert.equal(ix.shapes.sh.bake.total_s, 6.1);
+  assert.deepEqual(ix.shapes.sh.bake.jobs, ['j1']);
+  fold(ix, { v: 1, at: 3, kind: 'bake', shape: 'sh', dataset_id: 'd', dataset_sha256: null, job_id: 'j2', backend: 'gradient', status: 'FAILED', rows: 8, total_s: 4, npz_sha256: null });
+  assert.equal(ix.shapes.sh.bake.n, 2, 'a failed lesson finished too');
 });
 
 test('a gradient lesson in the same log IS a price', () => {

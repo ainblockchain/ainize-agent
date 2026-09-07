@@ -216,6 +216,18 @@ const shapeOf = (ix: MemoryIndex, shape: string): ShapeCounters => {
   return fresh;
 };
 
+/**
+ * The statuses a lesson can END in, on the node — success or not.
+ *
+ * `DONE` is the teach VIEW's word for a finished lesson and the node never writes it, so keying on it meant a
+ * SUCCESSFUL lesson never incremented this shape's bake counter: measured 2026-09-07, a baked engram sat in memory
+ * while the shape it came from reported `bakes 0`. This is the node's own list (`TEACH_TERMINAL` in
+ * `@ngram/mcp`'s teach-view), written out here so `memory.ts` stays free of the MCP client, and pinned to it by a
+ * test in `bake.test.ts`. `bake.ts`'s BAKE_DONE_STATUSES is the SUCCESS subset — a failed lesson finished, and it
+ * is not a price.
+ */
+export const LESSON_TERMINAL = ['READY', 'NEEDS_MORE', 'FAILED', 'CANCELLED', 'PENDING_REVIEW', 'REJECTED', 'ANNOUNCED', 'EXPIRED'] as const;
+
 export const answerCacheKey = (stackFp: string, key: string): string => `${stackFp} ${key}`;
 
 /**
@@ -291,7 +303,7 @@ export function fold(ix: MemoryIndex, e: MemoryEvent): void {
     }
     case 'bake': {
       const s = shapeOf(ix, e.shape);
-      if (e.status === 'DONE' || e.status === 'FAILED' || e.status === 'CANCELLED') {
+      if ((LESSON_TERMINAL as readonly string[]).includes(e.status)) {
         s.bake.n += 1;
         s.bake.total_s += e.total_s ?? 0;
         if (e.job_id && !s.bake.jobs.includes(e.job_id)) s.bake.jobs.push(e.job_id);
