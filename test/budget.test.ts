@@ -384,6 +384,19 @@ test('every unit has a line, and an uncapped one says which flag would set it', 
   assert.match(lines[2]!, /^lessons: no cap set — --lessons-per-day would set one$/);
 });
 
+test('a reservation left open by an earlier run gets its own line, and money says why it is not charged', () => {
+  const h = home();
+  mkdirSync(h, { recursive: true });
+  for (const r of [
+    { v: 1, id: 'r_a', kind: 'queries', event: 'intent', amount: '2', at: T - 60_000, day: dayKey(T), act: 'mcp_call' },
+    { v: 1, id: 'r_b', kind: 'money', event: 'intent', amount: '1', at: T - 60_000, day: dayKey(T), act: 'buy', currency: 'AIN' },
+  ]) appendFileSync(spendFile(h), JSON.stringify(r) + '\n');
+  const lines = open(h, { money: 5, queries: 5 }).lines('AIN');
+  assert.equal(lines.length, 6);
+  assert.match(lines[1]!, /1 unfinished payment intent\(s\) worth 1 AIN .* are NOT counted here: purchases\.jsonl/);
+  assert.match(lines[3]!, /1 unfinished reservation\(s\) worth 2 upstream queries .* are counted as spent/);
+});
+
 // ---------------------------------------------------------------- what one lesson costs in GPU seconds
 test('GPU seconds per lesson: given explicitly, or from a node that publishes it, or refused', () => {
   assert.deepEqual(trainerWorstCaseSeconds(null, 1800), { seconds: '1800', via: 'flag', origin: '--gpu-seconds-per-lesson' });

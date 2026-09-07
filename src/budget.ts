@@ -411,8 +411,22 @@ export class AgentBudget {
 
   views(currency = this.currency): BudgetView[] { return BUDGET_KINDS.map((k) => this.view(k, currency)); }
 
-  /** One line per unit for `agent budget`, in the agent's locale. */
-  lines(currency = this.currency): string[] { return BUDGET_KINDS.map((k) => this.probe(k, 0, currency).line); }
+  /**
+   * One line per unit for `agent budget`, in the agent's locale, plus a second line wherever an earlier run left a
+   * reservation open — "why is a third of today's budget gone before I started" needs an answer on the same screen.
+   */
+  lines(currency = this.currency): string[] {
+    const out: string[] = [];
+    for (const k of BUDGET_KINDS) {
+      const { line, view } = this.probe(k, 0, currency);
+      out.push(line);
+      if (view.unresolved.count === 0) continue;
+      out.push(k === 'money'
+        ? this.t('unresolved_money_note', { count: view.unresolved.count, amount: view.unresolved.amount, currency })
+        : this.t('unresolved_note', { count: view.unresolved.count, amount: view.unresolved.amount, unit: view.unit }));
+    }
+    return out;
+  }
 
   /**
    * Would this reservation fit? Reserves nothing, writes nothing, holds nothing — a gate that only asks.
