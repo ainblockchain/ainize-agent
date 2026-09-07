@@ -27,7 +27,7 @@ export const LOOP_STRINGS: Dict = {
     ko: '모델이 답했습니다 — 모델 호출 1회, {ms} ms{tokens}',
   },
   'ask.answer.retrieval': {
-    en: 'answered from what was just retrieved — {rows} rows from {server}, and they are in memory now',
+    en: 'answered from what was just retrieved — rows {rows} from {server}, and they are in memory now',
     ko: '방금 조회한 결과로 답했습니다 — {server}에서 {rows}행을 받았고, 이제 기억에 있습니다',
   },
   'ask.answer.none': {
@@ -73,8 +73,10 @@ export const LOOP_STRINGS: Dict = {
     ko: '{shape} 학습을 보류합니다: N*를 계산할 수 없습니다 — {missing}. --bake-after <n> 으로 기준을 직접 정하면 컴파일하며, 그 경우 정책으로 표시됩니다.',
   },
   'bake.blocked.material': {
-    en: 'not baking {shape}: distinct facts {rows}, and the node refuses a gradient lesson under {floor}. A lesson is non-refundable, so it is not spent on a 400.',
-    ko: '{shape} 학습을 보류합니다: 서로 다른 사실이 {rows}개인데, 노드는 {floor}개 미만의 gradient 학습을 거부합니다. 학습권은 환불되지 않으므로 400 응답에 쓰지 않습니다.',
+    // NOT "the node refuses it": `teach.rowsPerJob` is a CEILING on questions per lesson, and floorGradient is what
+    // that ceiling falls back to. It is used as a material floor because a handful of facts is not a knowledge.
+    en: 'not baking {shape}: distinct facts {rows}, under the {floor} this agent will spend a non-refundable lesson on (the node\'s own teach.rowsPerJob.floorGradient). A handful of facts is not a knowledge.',
+    ko: '{shape} 학습을 보류합니다: 서로 다른 사실이 {rows}개로, 환불되지 않는 학습권을 쓸 최소치 {floor}개에 못 미칩니다 (노드 자신의 teach.rowsPerJob.floorGradient 값). 사실 몇 개는 지식이 아닙니다.',
   },
   'bake.blocked.stability': {
     en: 'not baking {shape}: churn {churn} is over --max-churn {max}. A fact that moved between two pulls is a fact the compiled copy would be wrong about — it belongs in The Graph, on the tail.',
@@ -133,5 +135,57 @@ export const LOOP_STRINGS: Dict = {
   'view.why.header': {
     en: 'why shape {shape} has (not) been compiled',
     ko: 'shape {shape} 를 컴파일했는지, 안 했다면 왜 안 했는지',
+  },
+
+  // ---------------------------------------------------------------- things that went wrong, said in both languages
+  'ask.model.unreachable': {
+    en: 'the serving model did not answer ({why}) — answering from memory instead, labelled as remembered',
+    ko: '서빙 모델이 답하지 않았습니다 ({why}) — 대신 기억에서 답하며, 기억한 답이라고 표시합니다',
+  },
+  'ask.model.mismatch': {
+    en: 'the model said {got} and memory held {remembered} — the remembered fact is demoted, and this question falls through to the cost path',
+    ko: '모델은 {got} 라고 답했고 기억은 {remembered} 을 가지고 있었습니다 — 기억한 사실을 강등하고, 이 질문은 비용 경로로 넘어갑니다',
+  },
+  'ask.catalog.failed': {
+    en: 'the catalog could not be read ({why}) — nothing was bought',
+    ko: '카탈로그를 읽지 못했습니다 ({why}) — 아무것도 사지 않았습니다',
+  },
+  'ask.buy.failed': {
+    en: 'the purchase failed ({why}) — nothing was settled against the money budget',
+    ko: '구매에 실패했습니다 ({why}) — 금액 예산에서 정산된 것은 없습니다',
+  },
+  'ask.plan.unreadable': {
+    en: 'plan {file} could not be read: {why}',
+    ko: '계획 파일 {file} 을 읽지 못했습니다: {why}',
+  },
+  'ask.retrieve.failed': {
+    en: 'the retrieval failed ({why})',
+    ko: '조회에 실패했습니다 ({why})',
+  },
+  'ask.answer.paraphrase': {
+    en: 'the plan answers {prompt} — which is what was asked, in the plan\'s own words',
+    ko: '계획이 답하는 질문은 {prompt} 입니다 — 물어본 것과 같은 내용이고, 표현만 계획의 것입니다',
+  },
+
+  // ---------------------------------------------------------------- the bake, when it cannot proceed as written
+  'bake.rowsUnreadable': {
+    en: 'unreadable lines in the retrieved rows file: {n}. They were left out of the training set.',
+    ko: '조회 결과 파일에서 읽지 못한 줄: {n}개. 학습 데이터에서 제외했습니다.',
+  },
+  'bake.noPreflight': {
+    en: 'the node reports no serving model, so the preflight cannot run — the lesson is submitted without asking what the model already knows, and it still costs one of today\'s lessons',
+    ko: '노드에 서빙 모델이 없다고 보고되어 프리플라이트를 실행할 수 없습니다 — 모델이 이미 아는 것을 묻지 않은 채 학습을 제출하며, 오늘의 학습권 1개는 그대로 소모됩니다',
+  },
+  'bake.gpuZero': {
+    en: 'the stub backend starts no trainer, so this lesson holds 0 GPU seconds — a measured zero, not an unknown',
+    ko: 'stub 백엔드는 트레이너를 실행하지 않으므로 이 학습은 GPU 0초를 예약합니다 — 모르는 값이 아니라 측정된 0입니다',
+  },
+  'bake.gpuUnknown': {
+    en: 'not baking: this node runs the {backend} trainer and does not publish its timeout (GET /api/teach/policy has no limits.trainer_timeout_s), so there is no worst case to hold against the GPU-second budget. Give it with --gpu-seconds-per-lesson. Nothing was spent.',
+    ko: '학습하지 않습니다: 이 노드는 {backend} 트레이너를 쓰지만 그 타임아웃을 공개하지 않습니다 (GET /api/teach/policy 에 limits.trainer_timeout_s 가 없습니다). GPU 초 예산에 잡을 최악값이 없습니다. --gpu-seconds-per-lesson 옵션으로 알려주세요. 아무것도 쓰지 않았습니다.',
+  },
+  'bake.notSubmitted': {
+    en: 'the lesson was not submitted ({why}) — no lesson and no GPU second were spent',
+    ko: '학습을 제출하지 못했습니다 ({why}) — 학습권도 GPU 초도 쓰지 않았습니다',
   },
 };

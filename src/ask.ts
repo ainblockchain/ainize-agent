@@ -182,7 +182,8 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       }
       // A mismatch is not an error. The row is demoted where it stands (the `recall` event does it) and the loop
       // falls through to the cost path, which is what the memory turned out not to cover.
-      say('    ' + t('ask.answer.model', { ms: got.elapsed_ms, tokens: '' }) + ` — but it said ${JSON.stringify(got.text)}, and memory held ${JSON.stringify(recall.answer)}. Memory demoted; falling through.`);
+      say('    ' + t('ask.answer.model', { ms: got.elapsed_ms, tokens: '' }));
+      say('    ' + t('ask.model.mismatch', { got: JSON.stringify(got.text), remembered: JSON.stringify(recall.answer) }));
     } catch (e) {
       /*
        * The confirming completion could not be made. That is not a reason to forget the answer: memory held it,
@@ -191,7 +192,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
        * would be with no serving model at all (§4, arm C's offline claim). Throwing it away and paying for a
        * lookup instead would be paying twice for a fact this agent already has.
        */
-      say(`    the serving model did not answer (${(e as Error).message}) — answering from memory instead, labelled as remembered`);
+      say('    ' + t('ask.model.unreachable', { why: (e as Error).message }));
       memory.recordRecall({ row_key: recall.row_key, shape: recall.shape, hit: true, via: 'memory', engram: recall.engram, stack_fp: stackFp, ms: 0, answer: recall.answer });
       say('    ' + t('ask.answer.memory', { engram: recall.engram ?? 'memory', date: new Date(recall.learned_at ?? 0).toISOString().slice(0, 10) }));
       return finish({ answer: recall.answer, via: 'memory', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, bake: null, refusal: null, outcome: 'memory', success: true });
@@ -209,7 +210,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       // whether there is anything worth reserving money for.
       if (pick && (pick.quorum_ok === false || pick.sellable === false)) pick = null;
     } catch (e) {
-      say(`[2] the catalog could not be read (${(e as Error).message})`);
+      say('[2] ' + t('ask.catalog.failed', { why: (e as Error).message }));
     }
     if (!pick) say('[2] ' + t('ask.buy.none', { market }));
     else {
@@ -268,7 +269,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
         }
       } catch (e) {
         hold.release(`the purchase failed: ${(e as Error).message}`);
-        say(`    the purchase failed (${(e as Error).message}) — nothing was settled against the money budget`);
+        say('    ' + t('ask.buy.failed', { why: (e as Error).message }));
       }
       // Ask memory again: the anchor's samples may now answer the question outright.
       const after = memory.recall(o.question, { stackFp, hasModel });
@@ -288,7 +289,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
     const loaded = P.loadPlans({ home });
     const usable = o.plans?.length ? loaded.plans.filter((p) => o.plans!.some((g) => p.id === g || p.id.startsWith(g))) : loaded.plans;
     plansLoaded = usable.length;
-    for (const e of loaded.errors) say(`    plan ${e.file} could not be read: ${e.error}`);
+    for (const e of loaded.errors) say('    ' + t('ask.plan.unreadable', { file: e.file, why: e.error }));
     const chosen = R.planForQuestion(usable, o.question);
     if (!chosen.ok) {
       // A question outside every declared phrasing is NOT retrieved. The agent says what it has and stops, rather
@@ -319,7 +320,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
           say('[3] ' + e.message);
           return finish({ answer: null, via: null, engram: null, shape: recall.shape, recall, bought, retrieved: null, bake: null, refusal: { kind: e.kind, code: e.code, flag: e.flag, message: e.message }, outcome: 'refused', success: false });
         }
-        say(`[3] the retrieval failed (${(e as Error).message})`);
+        say('[3] ' + t('ask.retrieve.failed', { why: (e as Error).message }));
       }
     }
   }
@@ -341,7 +342,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       // wording differs from the question, so the row's own prompt travels with the answer and the mismatch shows.
       answer = retrieved.primary.answer;
       memory.recordRecall({ row_key: base.row_key, shape, hit: true, via: 'memory', engram: null, stack_fp: stackFp, ms: retrieved.ms, answer });
-      say(`    the plan answers ${JSON.stringify(retrieved.primary.prompt)} — which is what was asked, in the plan's own words`);
+      say('    ' + t('ask.answer.paraphrase', { prompt: JSON.stringify(retrieved.primary.prompt) }));
       say('    ' + t('ask.answer.retrieval', { rows: retrieved.rows.length, server: retrieved.provenance.server.name }));
     }
   }

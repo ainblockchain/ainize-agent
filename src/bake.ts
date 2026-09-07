@@ -369,7 +369,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
       preflight: 'ran', publish_command: '', view: null, error: 'no rows retrieved for this shape',
     };
   }
-  if (ds.unreadable) log(`${ds.unreadable} line(s) of the retrieved rows file were not readable and were left out`);
+  if (ds.unreadable) log(t('bake.rowsUnreadable', { n: ds.unreadable }));
 
   // The teaching key IS this agent's identity: its lessons and its purchases share one address on a public record.
   // Deliberate — lineage needs it — and said out loud before the first lesson.
@@ -397,7 +397,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
    */
   const info = await ctx.nodeInfo().catch(() => null);
   const noModel = info ? !info.runtime_available : false;
-  if (noModel) log('the node reports no serving model, so the preflight cannot run — the lesson is submitted without asking what the model already knows, and it still costs one of today\'s lessons');
+  if (noModel) log(t('bake.noPreflight'));
   const backend = policy?.backend ?? null;
   if (backend === 'stub') log(t('bake.stub'));
   // The node's own per-key daily limit is a SECOND ceiling and the tighter of the two wins.
@@ -417,7 +417,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
    */
   const worst = trainerWorstCaseSeconds(policy, o.gpuSecondsPerLesson);
   if (!worst && backend !== 'stub') {
-    const why = `this node runs the ${backend ?? 'unknown'} trainer and does not publish its timeout (GET /api/teach/policy has no limits.trainer_timeout_s), so there is no worst case to hold against the GPU-second budget. Give it with --gpu-seconds-per-lesson <s>. Nothing was spent.`;
+    const why = t('bake.gpuUnknown', { backend: backend ?? 'unknown' });
     log(why);
     return {
       shape: o.shape, rows: ds.rows.length, job_id: null, dataset_id: null, backend, status: 'NOT_SUBMITTED',
@@ -426,7 +426,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
     };
   }
   const gpuSeconds = worst?.seconds ?? '0';
-  if (!worst) log('the stub backend starts no trainer, so this lesson holds 0 GPU seconds — a measured zero, not an unknown');
+  if (!worst) log(t('bake.gpuZero'));
 
   // Hold both before anything is submitted. A refusal here has cost nothing at all.
   const lessonHold = o.budget.reserve({ kind: 'lessons', amount: 1, act: 'teach_job', ref: short, market: o.market });
@@ -511,7 +511,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
       // `runTeachLesson` makes to the MCP server's own session cap.
       lessonHold.release(`the node never queued the lesson: ${msg}`);
       gpuHold.release(`the node never queued the lesson: ${msg}`);
-      log(`the lesson was not submitted (${msg}) — no lesson and no GPU second were spent`);
+      log(t('bake.notSubmitted', { why: msg }));
     } else {
       // It WAS queued: the node charges at submit and does not refund, so this side does not pretend otherwise.
       lessonHold.settle(1, `lesson ${jobId ?? '?'} failed after it was queued`);
