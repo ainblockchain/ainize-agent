@@ -160,6 +160,48 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
     return { ...base, ...r, cost, budget: budget.views() };
   };
 
+  /**
+   * Should this shape be compiled into memory? — asked on EVERY path that knows a shape, not only on the one that
+   * just paid for a lookup.
+   *
+   * It used to sit after the retrieval, so a question answered from memory never reached it. That is the wrong way
+   * round: the loop's whole aim is to stop retrieving, and a shape that has already crossed its threshold would
+   * then never be compiled, because nothing was retrieving it any more. The decision costs no query and no
+   * completion — it is files and arithmetic — and if the gates say no, nothing is spent.
+   */
+  const decideBake = async (shape: string | null): Promise<AskResult['bake']> => {
+    if (o.bake === false || !shape) return null;
+    const view = memory.view({ shape }).shapes.find((s) => s.shape === shape) ?? null;
+    if (!view) return null;
+    const policy: BakePolicy = { bakeAfter: o.bakeAfter ?? null, maxChurn: o.maxChurn ?? 0 };
+    const gpu = Number(o.gpuSecondsPerLesson ?? 0);
+    const probe: BudgetProbe = (kind, amount) => {
+      const v = budget.view(kind);
+      if (amount <= 0) return { ok: true, line: '' };
+      if (v.remaining === null) return { ok: false, line: `${v.unit}: no cap set — ${v.flag} would set one` };
+      return { ok: Number(v.remaining) >= amount, line: `${v.unit}: ${amount} needed, ${v.remaining} of ${v.effective_cap} left today` };
+    };
+    const decision = shouldBake(view, policy, { home, budget: probe, gpuSeconds: gpu });
+    say('[4] ' + t(decision.say.key, decision.say.vars));
+    let result: BakeRun | null = null;
+    if (decision.bake) {
+      const B: BakeRunModule = await import('./bake.js');
+      result = await B.runBake({
+        shape: view.shape, market, home, memory, budget, locale,
+        ...(o.gpuSecondsPerLesson !== undefined ? { gpuSecondsPerLesson: o.gpuSecondsPerLesson } : {}),
+        ...(o.privateKey ? { privateKey: o.privateKey } : {}),
+        log: (l) => say('    ' + l),
+      });
+      cost.lessons += result.lesson_spent ? 1 : 0;
+      cost.gpu_s = result.gpu_seconds_settled;
+    }
+    return { decision, result };
+  };
+
+  /** Finish on a path that produced an answer: the bake decision is part of finishing, not part of retrieving. */
+  const answered = async (r: Omit<AskResult, keyof typeof base | 'cost' | 'budget' | 'bake'>): Promise<AskResult> =>
+    finish({ ...r, bake: await decideBake(r.shape) });
+
   // ---------------------------------------------------------------- [1] recall — zero completions to decide
   const recall = memory.recall(o.question, { stackFp, hasModel });
   say('[1] ' + recall.line);
@@ -167,13 +209,13 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
   if (recall.decision === 'cache' && recall.answer) {
     memory.recordRecall({ row_key: recall.row_key, shape: recall.shape, hit: true, via: 'memory', engram: recall.engram, stack_fp: stackFp, ms: 0, answer: recall.answer });
     say('    ' + t('ask.answer.memory', { engram: recall.engram ?? 'memory', date: new Date(recall.learned_at ?? 0).toISOString().slice(0, 10) }));
-    return finish({ answer: recall.answer, via: 'memory', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, bake: null, refusal: null, outcome: 'memory', success: true });
+    return answered({ answer: recall.answer, via: 'memory', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, refusal: null, outcome: 'memory', success: true });
   }
 
   if (recall.decision === 'offline' && recall.answer) {
     memory.recordRecall({ row_key: recall.row_key, shape: recall.shape, hit: true, via: 'memory', engram: recall.engram, stack_fp: stackFp, ms: 0, answer: recall.answer });
     say('    ' + t('ask.answer.memory', { engram: recall.engram ?? 'memory', date: new Date(recall.learned_at ?? 0).toISOString().slice(0, 10) }));
-    return finish({ answer: recall.answer, via: 'memory', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, bake: null, refusal: null, outcome: 'memory', success: true });
+    return answered({ answer: recall.answer, via: 'memory', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, refusal: null, outcome: 'memory', success: true });
   }
 
   if (recall.decision === 'confirm' && recall.answer && api) {
@@ -188,7 +230,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       });
       if (hit) {
         say('    ' + t('ask.answer.model', { ms: got.elapsed_ms, tokens: got.usage.total_tokens === null ? '' : `, tokens ${got.usage.total_tokens}` }));
-        return finish({ answer: got.text, via: 'model', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, bake: null, refusal: null, outcome: 'model', success: true });
+        return answered({ answer: got.text, via: 'model', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, refusal: null, outcome: 'model', success: true });
       }
       // A mismatch is not an error. The row is demoted where it stands (the `recall` event does it) and the loop
       // falls through to the cost path, which is what the memory turned out not to cover.
@@ -205,7 +247,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       say('    ' + t('ask.model.unreachable', { why: (e as Error).message }));
       memory.recordRecall({ row_key: recall.row_key, shape: recall.shape, hit: true, via: 'memory', engram: recall.engram, stack_fp: stackFp, ms: 0, answer: recall.answer });
       say('    ' + t('ask.answer.memory', { engram: recall.engram ?? 'memory', date: new Date(recall.learned_at ?? 0).toISOString().slice(0, 10) }));
-      return finish({ answer: recall.answer, via: 'memory', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, bake: null, refusal: null, outcome: 'memory', success: true });
+      return answered({ answer: recall.answer, via: 'memory', engram: recall.engram, shape: recall.shape, recall, bought: null, retrieved: null, refusal: null, outcome: 'memory', success: true });
     }
   }
 
@@ -285,7 +327,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       const after = memory.recall(o.question, { stackFp, hasModel });
       if (after.hit && after.answer && after.decision !== 'miss') {
         memory.recordRecall({ row_key: after.row_key, shape: after.shape, hit: true, via: 'memory', engram: after.engram, stack_fp: stackFp, ms: 0, answer: after.answer });
-        return finish({ answer: after.answer, via: 'knowledge', engram: after.engram, shape: after.shape, recall: after, bought, retrieved: null, bake: null, refusal: null, outcome: 'knowledge', success: true });
+        return answered({ answer: after.answer, via: 'knowledge', engram: after.engram, shape: after.shape, recall: after, bought, retrieved: null, refusal: null, outcome: 'knowledge', success: true });
       }
     }
   }
@@ -328,7 +370,7 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
         memory.learnAsked({ question: o.question, answer: priorRow.answer, canonical: prior.row_keys[0], shape: priorRow.shape });
         memory.recordRecall({ row_key: base.row_key, shape: priorRow.shape, hit: true, via: 'memory', engram: priorRow.engram, stack_fp: stackFp, ms: 0, answer: priorRow.answer });
         say('    ' + t('ask.answer.memory', { engram: priorRow.engram ?? 'memory', date: new Date(priorRow.learned_at).toISOString().slice(0, 10) }));
-        return finish({ answer: priorRow.answer, via: 'memory', engram: priorRow.engram, shape: priorRow.shape, recall, bought, retrieved: null, bake: null, refusal: null, outcome: 'memory', success: true });
+        return answered({ answer: priorRow.answer, via: 'memory', engram: priorRow.engram, shape: priorRow.shape, recall, bought, retrieved: null, refusal: null, outcome: 'memory', success: true });
       }
       // Announced BEFORE the call, not after it: the line says what is about to be spent, and a retrieval that
       // hangs or fails must still leave a record of which plan and which slots were about to be sent.
@@ -391,40 +433,12 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
   }
 
   // ---------------------------------------------------------------- [4] should this shape be compiled into memory?
-  let bakeOut: AskResult['bake'] = null;
-  if (o.bake !== false && shape) {
-    const view = memory.view({ shape }).shapes.find((s) => s.shape === shape) ?? null;
-    if (view) {
-      const policy: BakePolicy = { bakeAfter: o.bakeAfter ?? null, maxChurn: o.maxChurn ?? 0 };
-      const gpu = Number(o.gpuSecondsPerLesson ?? 0);
-      const probe: BudgetProbe = (kind, amount) => {
-        const v = budget.view(kind);
-        if (amount <= 0) return { ok: true, line: '' };
-        if (v.remaining === null) return { ok: false, line: `${v.unit}: no cap set — ${v.flag} would set one` };
-        return { ok: Number(v.remaining) >= amount, line: `${v.unit}: ${amount} needed, ${v.remaining} of ${v.effective_cap} left today` };
-      };
-      const decision = shouldBake(view, policy, { home, budget: probe, gpuSeconds: gpu });
-      say('[4] ' + t(decision.say.key, decision.say.vars));
-      let result: BakeRun | null = null;
-      if (decision.bake) {
-        const B: BakeRunModule = await import('./bake.js');
-        result = await B.runBake({
-          shape: view.shape, market, home, memory, budget, locale,
-          ...(o.gpuSecondsPerLesson !== undefined ? { gpuSecondsPerLesson: o.gpuSecondsPerLesson } : {}),
-          ...(o.privateKey ? { privateKey: o.privateKey } : {}),
-          log: (l) => say('    ' + l),
-        });
-        cost.lessons += result.lesson_spent ? 1 : 0;
-        cost.gpu_s = result.gpu_seconds_settled;
-      }
-      bakeOut = { decision, result };
-    }
-  }
-
+  // (the decision itself is `decideBake`, above — every path that knows a shape reaches it, not only this one)
   if (answer) {
-    return finish({ answer, via: 'retrieval', engram: null, shape, recall, bought, retrieved, bake: bakeOut, refusal: null, outcome: 'retrieval', success: true });
+    return answered({ answer, via: 'retrieval', engram: null, shape, recall, bought, retrieved, refusal: null, outcome: 'retrieval', success: true });
   }
   memory.recordRecall({ row_key: base.row_key, shape, hit: false, via: 'none', engram: null, stack_fp: stackFp, ms: 0 });
+  const bakeOut = await decideBake(shape);
   say(t('ask.answer.none', { market }));
   return finish({ answer: null, via: null, engram: null, shape, recall, bought, retrieved, bake: bakeOut, refusal: null, outcome: 'unanswered', success: false });
 }
