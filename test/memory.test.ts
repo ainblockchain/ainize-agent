@@ -443,3 +443,60 @@ test('decideRecall is a pure function of the index — the same inputs decide th
   assert.equal(r.engram, 'self-baked-1');
   assert.equal(existsSync(join(tmpdir(), 'no-home-was-touched')), false);
 });
+
+// ------------------------------------------------------------------ the wording somebody actually typed
+
+test('a question is recallable in the wording it was ASKED, not only in the plan\'s wording', () => {
+  // Measured before the fix (2026-09-07, throwaway node on 4193, local stdio MCP stand-in): the second ask of
+  // "what is the contract address of USDC?" reported recall.decision "miss" and spent a second upstream query on a
+  // fact already on disk, because `retrieve.ts` learns a row under `mapping.prompt` — a sentence in none of the
+  // plan's own match patterns and one no person types.
+  const m = AgentMemory.open(newHome());
+  const canonical = 'What is the Ethereum mainnet contract address of the USD Coin (USDC) token?';
+  m.learn([{ prompt: canonical, answer: '0xa0b8', source: 'retrieval', shape: 'sh' }]);
+  assert.equal(m.recall('what is the contract address of USDC?', { stackFp: 'fp', hasModel: false }).decision, 'miss');
+
+  m.learnAsked({ question: 'what is the contract address of USDC?', answer: '0xa0b8', canonical: rowKey(canonical), shape: 'sh' });
+  const r = m.recall('what is the contract address of USDC?', { stackFp: 'fp', hasModel: false });
+  assert.equal(r.decision, 'offline');
+  assert.equal(r.answer, '0xa0b8');
+  assert.equal(m.index.rows[rowKey('what is the contract address of USDC?')].alias_of, rowKey(canonical));
+});
+
+test('a second wording is not a second fact: an alias is recallable but is not material for a bake', () => {
+  const m = AgentMemory.open(newHome());
+  const canonical = 'What is the Ethereum mainnet contract address of the USD Coin (USDC) token?';
+  m.learn([{ prompt: canonical, answer: '0xa0b8', source: 'retrieval', shape: 'sh' }]);
+  m.learnAsked({ question: 'USDC contract address', answer: '0xa0b8', canonical: rowKey(canonical), shape: 'sh' });
+  m.learnAsked({ question: 'USDC 컨트랙트 주소 알려줘', answer: '0xa0b8', canonical: rowKey(canonical), shape: 'sh' });
+  m.recordRetrieve({ shape: 'sh', plan_id: 'p', arguments_sha256: 'a', rows: 1, new_rows: 1, refetched: 0, churned: 0, queries: 1, bytes: 10, ms: 5 });
+  const v = memoryView(m, { shape: 'sh' });
+  assert.equal(v.facts, 3);
+  // …and exactly one of them is material. The lesson trains on the rows `retrieve.ts` wrote down, so a material gate
+  // counting wordings would pass on 8 with 4 rows in the dataset.
+  assert.equal(v.shapes[0].distinct_rows, 1);
+});
+
+test('a fact that moved takes its other wordings with it', () => {
+  const m = AgentMemory.open(newHome());
+  const canonical = 'What is the Ethereum mainnet contract address of the USD Coin (USDC) token?';
+  m.learn([{ prompt: canonical, answer: '0xold', source: 'retrieval', shape: 'sh' }]);
+  m.learnAsked({ question: 'USDC contract address', answer: '0xold', canonical: rowKey(canonical), shape: 'sh' });
+  // the next retrieval of the same shape finds a different answer — the churn case
+  m.learn([{ prompt: canonical, answer: '0xnew', source: 'retrieval', shape: 'sh' }]);
+  assert.equal(m.recall('USDC contract address', { stackFp: 'fp', hasModel: false }).answer, '0xnew');
+  // and it survives a replay from the log, because `fold` is the only place the index moves
+  const replayed = AgentMemory.open(m.home, { now: () => Date.now() });
+  rmSync(memoryIndexFile(m.home), { force: true });
+  assert.equal(replayed.refresh().index.rows[rowKey('USDC contract address')].answer, '0xnew');
+});
+
+test('the asker\'s wording is not aliased to itself', () => {
+  const m = AgentMemory.open(newHome());
+  const q = 'What is the Ethereum mainnet contract address of the USD Coin (USDC) token?';
+  m.learn([{ prompt: q, answer: '0xa0b8', source: 'retrieval', shape: 'sh' }]);
+  assert.equal(m.learnAsked({ question: q, answer: '0xa0b8', canonical: rowKey(q), shape: 'sh' }), null);
+  assert.equal(m.index.rows[rowKey(q)].alias_of, undefined);
+  m.recordRetrieve({ shape: 'sh', plan_id: 'p', arguments_sha256: 'a', rows: 1, new_rows: 1, refetched: 0, churned: 0, queries: 1, bytes: 10, ms: 5 });
+  assert.equal(memoryView(m, { shape: 'sh' }).shapes[0].distinct_rows, 1);
+});

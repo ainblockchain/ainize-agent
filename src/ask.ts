@@ -341,6 +341,17 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       // The plan's query is filtered by the slots, so the row it produced IS the fact that was asked for — but the
       // wording differs from the question, so the row's own prompt travels with the answer and the mismatch shows.
       answer = retrieved.primary.answer;
+      /*
+       * And the question is remembered IN THE WORDING IT WAS ASKED, as an alias of the row that answered it.
+       *
+       * `retrieve.ts` learns each row under the PLAN's `mapping.prompt` — "What is the Ethereum mainnet contract
+       * address of the USD Coin (USDC) token?" — which is not a sentence anybody types and is in none of the plan's
+       * own match patterns. Without this line the next identical ask misses memory and pays for the lookup again,
+       * for ever: measured on 2026-09-07, the second ask of "what is the contract address of USDC?" reported
+       * `recall.decision: "miss"` and spent a second query on a fact already on disk. The link is evidence, not a
+       * guess — the slots were bound out of this question and the upstream query carried them (see `learnAsked`).
+       */
+      memory.learnAsked({ question: o.question, answer, canonical: rowKey(retrieved.primary.prompt), shape });
       memory.recordRecall({ row_key: base.row_key, shape, hit: true, via: 'memory', engram: null, stack_fp: stackFp, ms: retrieved.ms, answer });
       say('    ' + t('ask.answer.paraphrase', { prompt: JSON.stringify(retrieved.primary.prompt) }));
       say('    ' + t('ask.answer.retrieval', { rows: retrieved.rows.length, server: retrieved.provenance.server.name }));

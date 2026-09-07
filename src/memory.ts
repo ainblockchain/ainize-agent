@@ -92,8 +92,18 @@ const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').dig
 
 export type MemoryLearnSource = 'anchor' | 'dataset' | 'retrieval' | 'bake';
 
-/** A fact entered memory. */
-export interface LearnPayload { kind: 'learn'; row_key: string; answer: string; source: MemoryLearnSource; engram: string | null; shape: string | null }
+/**
+ * A fact entered memory.
+ *
+ * `alias_of` is the row key this one is ANOTHER WORDING OF, and it is written only where the link is evidence rather
+ * than a guess: a retrieval whose query was filtered by the slots a plan bound out of the question. The row it names
+ * is the canonical fact; this row is the sentence somebody actually typed. Without it, a question retrieved through
+ * a plan is learned under the PLAN's phrasing (`What is the Ethereum mainnet contract address of the USD Coin (USDC)
+ * token?`) and never under the asker's (`what is the contract address of USDC?`), so the same question is paid for
+ * again on every run and the loop never closes. An alias is recallable, and it is NOT counted as material for a bake
+ * — the lesson trains on the retrieved rows, and a second wording of a fact is not a second fact.
+ */
+export interface LearnPayload { kind: 'learn'; row_key: string; answer: string; source: MemoryLearnSource; engram: string | null; shape: string | null; alias_of?: string }
 /** A question was answered — from the cache, from the model, or from memory with nothing to check it against. */
 export interface RecallPayload { kind: 'recall'; row_key: string; shape: string | null; hit: boolean; via: 'memory' | 'model' | 'none'; engram: string | null; stack_fp: string | null; ms: number; tokens?: number; answer?: string }
 /** An upstream call was paid for. `new_rows`/`refetched`/`churned` are §5.3's retroactive recurrence counter. */
@@ -134,6 +144,8 @@ export interface MemoryRow {
   state: 'known' | 'unverified';
   learned_at: number;
   verified_at: number | null;
+  /** Set when this row is another wording of `alias_of` — recallable, but not material for a bake. */
+  alias_of?: string;
 }
 
 /** A knowledge. `state` is about RESIDENCY — the node's table decides it, never this agent's belief. */
@@ -220,7 +232,15 @@ export function fold(ix: MemoryIndex, e: MemoryEvent): void {
       ix.rows[e.row_key] = {
         answer: e.answer, engram: e.engram, source: e.source, shape: e.shape ?? prev?.shape ?? null,
         state: 'known', learned_at: e.at, verified_at: prev && prev.answer === e.answer ? prev.verified_at : null,
+        ...(e.alias_of !== undefined ? { alias_of: e.alias_of } : prev?.alias_of !== undefined ? { alias_of: prev.alias_of } : {}),
       };
+      // A fact that MOVED takes its other wordings with it. Without this, a churned answer would be corrected under
+      // the plan's phrasing and left stale under the asker's — and recall, which hits the asker's, would keep
+      // answering yesterday's fact for ever without ever paying for a lookup that would notice. The walk runs only
+      // when an answer actually changed, which is the churn case and is rare.
+      if (prev && prev.answer !== e.answer) {
+        for (const r of Object.values(ix.rows)) if (r.alias_of === e.row_key) { r.answer = e.answer; r.learned_at = e.at; r.verified_at = null; r.state = 'known'; }
+      }
       break;
     }
     case 'recall': {
@@ -623,16 +643,29 @@ export class AgentMemory {
   // -------------------------------------------------------------------------------- writing things down
 
   /** A fact enters memory. Returns the keys it landed on, so a caller can count what was actually new. */
-  learn(rows: { prompt: string; answer: string; source: MemoryLearnSource; engram?: string | null; shape?: string | null }[], at = this.now()): string[] {
+  learn(rows: { prompt: string; answer: string; source: MemoryLearnSource; engram?: string | null; shape?: string | null; aliasOf?: string }[], at = this.now()): string[] {
     const keys: string[] = [];
     for (const r of rows) {
       const key = rowKey(r.prompt);
       const answer = normalizeAnswer(r.answer);
       if (!key || !answer) continue;   // an empty question or an empty answer is not a fact
-      this.append({ kind: 'learn', row_key: key, answer, source: r.source, engram: r.engram ?? null, shape: r.shape ?? null }, at);
+      if (r.aliasOf === key) continue;  // the wording somebody used IS the row's own — there is no second wording
+      this.append({ kind: 'learn', row_key: key, answer, source: r.source, engram: r.engram ?? null, shape: r.shape ?? null, ...(r.aliasOf ? { alias_of: r.aliasOf } : {}) }, at);
       keys.push(key);
     }
     return keys;
+  }
+
+  /**
+   * Remember a fact under the wording it was ASKED in, pointing at the row that answered it.
+   *
+   * Only the retrieval path may call this, and only when the plan's own filter is what produced the row: the slots
+   * were bound out of the question and the upstream query carried them, so "this row is the answer to this question"
+   * is something that was measured, not inferred from two sentences looking alike.
+   */
+  learnAsked(p: { question: string; answer: string; canonical: string; shape: string | null }, at = this.now()): string | null {
+    const [key] = this.learn([{ prompt: p.question, answer: p.answer, source: 'retrieval', engram: null, shape: p.shape, aliasOf: p.canonical }], at);
+    return key ?? null;
   }
 
   /** Seed memory from a knowledge's published benchmark samples (up to 32 on the ledger). */
@@ -827,8 +860,10 @@ export function memoryView(mem: AgentMemory, opts: { shape?: string; rows?: numb
   const engrams = Object.values(ix.engrams).sort((a, b) => (a.position ?? 99) - (b.position ?? 99) || b.at - a.at);
   const engrams_by_state = { loaded: 0, held: 0, unverified: 0 };
   for (const g of engrams) engrams_by_state[g.state] += 1;
+  // Material for a bake, per shape. An ALIAS is excluded: the lesson trains on the rows `retrieve.ts` wrote down, so
+  // counting a second wording of one fact here would let the material gate pass on 8 with 4 rows in the dataset.
   const distinct = new Map<string, number>();
-  for (const r of rowsList) if (r.shape) distinct.set(r.shape, (distinct.get(r.shape) ?? 0) + 1);
+  for (const r of rowsList) if (r.shape && r.alias_of === undefined) distinct.set(r.shape, (distinct.get(r.shape) ?? 0) + 1);
   const shapes = Object.values(ix.shapes)
     .filter((s) => !opts.shape || s.shape === opts.shape || s.shape.startsWith(opts.shape) || s.plan_id === opts.shape)
     .map((s): MemoryShapeView => ({
