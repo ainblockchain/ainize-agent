@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { ETA_MIN_SAMPLES, ROWS_FLOOR_GRADIENT, bakeCosts, nStar, shouldBake } from '../src/bake.js';
+import { BAKE_DONE_STATUSES, ETA_MIN_SAMPLES, ROWS_FLOOR_GRADIENT, bakeCosts, nStar, shouldBake } from '../src/bake.js';
 import { memoryFile, type MemoryShapeView } from '../src/memory.js';
 
 const homes: string[] = [];
@@ -72,7 +72,7 @@ test('the token term is reported and never binds — compiling does not save com
 test('a stub lesson is not a price: its seconds are excluded and bake_cost stays missing', () => {
   const h = home();
   const ev = (o: Record<string, unknown>) => appendFileSync(memoryFile(h), JSON.stringify({ v: 1, at: 1, kind: 'bake', ...o }) + '\n');
-  ev({ shape: 'a'.repeat(64), dataset_id: 'd', dataset_sha256: null, job_id: 'j1', backend: 'stub', status: 'DONE', rows: 12, total_s: 3, npz_sha256: null });
+  ev({ shape: 'a'.repeat(64), dataset_id: 'd', dataset_sha256: null, job_id: 'j1', backend: 'stub', status: 'READY', rows: 12, total_s: 3, npz_sha256: null });
   const costs = bakeCosts(h, 'a'.repeat(64));
   assert.deepEqual(costs.total_s, []);
   assert.deepEqual(costs.backends, ['stub']);
@@ -82,13 +82,25 @@ test('a stub lesson is not a price: its seconds are excluded and bake_cost stays
   assert.ok(r.missing.some((m) => m.includes('stub lesson trains no weights')), r.missing.join(' | '));
 });
 
+test('the statuses that count as a finished lesson are the node\'s own, and they do not drift', async () => {
+  // The node's terminal success status is READY, never "DONE" — `DONE` is the teach VIEW's word for it. Keying on
+  // the view's word meant `bake_cost` was never found, N* was never computable, and the economic gate could never
+  // be satisfied however many lessons had run.
+  const { TEACH_TERMINAL, teachState } = await import('@ngram/mcp/client');
+  const done = TEACH_TERMINAL.filter((s) => teachState(s) === 'done');
+  assert.deepEqual([...BAKE_DONE_STATUSES].sort(), [...done].sort());
+  assert.ok(BAKE_DONE_STATUSES.includes('READY' as never));
+  assert.ok(!(BAKE_DONE_STATUSES as readonly string[]).includes('FAILED'));
+});
+
 test('a gradient lesson in the same log IS a price', () => {
   const h = home();
   const ev = (o: Record<string, unknown>) => appendFileSync(memoryFile(h), JSON.stringify({ v: 1, at: 1, kind: 'bake', ...o }) + '\n');
-  ev({ shape: 'a'.repeat(64), job_id: 'j1', backend: 'stub', status: 'DONE', rows: 12, total_s: 3 });
-  ev({ shape: 'a'.repeat(64), job_id: 'j2', backend: 'gradient', status: 'DONE', rows: 12, total_s: 60 });
-  ev({ shape: 'b'.repeat(64), job_id: 'j3', backend: 'gradient', status: 'DONE', rows: 12, total_s: 900 });   // another shape
-  ev({ shape: 'a'.repeat(64), job_id: 'j4', backend: 'gradient', status: 'FAILED', rows: 12, total_s: 5 });   // not DONE
+  ev({ shape: 'a'.repeat(64), job_id: 'j1', backend: 'stub', status: 'READY', rows: 12, total_s: 3 });
+  ev({ shape: 'a'.repeat(64), job_id: 'j2', backend: 'gradient', status: 'READY', rows: 12, total_s: 60 });
+  ev({ shape: 'b'.repeat(64), job_id: 'j3', backend: 'gradient', status: 'READY', rows: 12, total_s: 900 });   // another shape
+  ev({ shape: 'a'.repeat(64), job_id: 'j4', backend: 'gradient', status: 'FAILED', rows: 12, total_s: 5 });    // produced nothing
+  ev({ shape: 'a'.repeat(64), job_id: 'j5', backend: 'gradient', status: 'QUEUED', rows: 12, total_s: null });  // not terminal
   assert.deepEqual(bakeCosts(h, 'a'.repeat(64)).total_s, [60]);
   assert.equal(nStar(priced(), { home: h }).n_star, 30.61);
 });

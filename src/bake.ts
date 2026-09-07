@@ -54,6 +54,20 @@ export const ROWS_FLOOR_GRADIENT = 8;
  */
 export const ETA_MIN_SAMPLES = 3;
 
+/**
+ * The node statuses that mean a lesson RAN and produced a knowledge file — the only ones whose seconds are the
+ * price of compiling something.
+ *
+ * These are the node's own terminal statuses whose `teachState()` is `done` (`@ngram/mcp`'s teach-view). Written out
+ * rather than imported because this module is on `ask`'s hot path and that import pulls the MCP SDK;
+ * `test/bake.test.ts` pins the list against `teachState` so it cannot drift.
+ *
+ * `NEEDS_MORE` is included on purpose: the lesson trained, it cost the seconds, and its checks did not pass.
+ * Counting it makes the bake cost larger and therefore N\* larger — the conservative direction. FAILED, REJECTED,
+ * EXPIRED and CANCELLED produced nothing, so their seconds are not the price of a knowledge.
+ */
+export const BAKE_DONE_STATUSES = ['READY', 'NEEDS_MORE', 'PENDING_REVIEW', 'ANNOUNCED'] as const;
+
 // ------------------------------------------------------------------------------------------------------ N*
 
 export type NStarKind = 'seconds' | 'queries' | 'tokens';
@@ -120,7 +134,7 @@ export function bakeCosts(home: string, shape: string): { total_s: number[]; bac
     try { e = JSON.parse(line) as MemoryEvent; } catch { continue; }
     if (e.kind !== 'bake') continue;
     const b = e as BakePayload & { at: number };
-    if (b.shape !== shape || b.status !== 'DONE') continue;
+    if (b.shape !== shape || !(BAKE_DONE_STATUSES as readonly string[]).includes(b.status)) continue;
     if (b.job_id && !out.jobs.includes(b.job_id)) out.jobs.push(b.job_id);
     // A stub lesson trains no weights. Its seconds are the cost of copying a fixture, and they are not a price.
     if (b.backend === 'stub') { out.backends.push('stub'); continue; }
