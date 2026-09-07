@@ -60,5 +60,13 @@ export const BUDGET_STRINGS = {
   line_no_cap: { en: '{unit}: no cap set — {flag} would set one', ko: '{unit}: 한도 없음 — {flag} 옵션으로 정할 수 있음' },
   line_node_capped: { en: '{unit}: {spent} spent, {reserved} held, {remaining} of {cap} left (yours {own_cap}, {market} allows {node_cap})', ko: '{unit}: 사용 {spent}, 예약 {reserved}, 한도 {cap} 중 {remaining} 남음 (사용자 한도 {own_cap}, {market} 노드 허용 {node_cap})' },
   unresolved_note: { en: '{count} unfinished reservation(s) worth {amount} {unit} from an earlier run are counted as spent — the act they were written for may have happened.', ko: '이전 실행에서 끝나지 않은 예약 {count}건 ({unit} {amount}) 이 사용한 것으로 계산됩니다 — 해당 작업이 실제로 일어났을 수 있습니다.' },
+  /**
+   * Money spent today in a currency the report was not asked about. Without it, `agent budget` on a CREDIT market
+   * with the default AIN denomination answered "0 spent" for a day the agent had paid 0.5 CREDIT.
+   */
+  line_other_currency: {
+    en: '  …and {amount} {currency} was paid today in another currency (purchases.jsonl). The cap above is per currency; pass --currency {currency} to measure against that one.',
+    ko: '  …그리고 오늘 다른 통화로 {currency} {amount} 를 지불했습니다 (purchases.jsonl). 위 한도는 통화별로 적용되며, 그 통화 기준으로 보려면 --currency {currency} 를 쓰십시오.',
+  },
   unresolved_money_note: { en: '{count} unfinished payment intent(s) worth {amount} {currency} from an earlier run are NOT counted here: purchases.jsonl is what was actually paid, and an x402 payment with no manifest is re-presented from pending-payments.jsonl rather than paid again.', ko: '이전 실행에서 끝나지 않은 결제 의도 {count}건 ({currency} {amount}) 은 여기에 포함하지 않습니다: 실제 지불액의 기준은 purchases.jsonl 이며, 매니페스트를 받지 못한 x402 결제는 pending-payments.jsonl 에서 다시 제시할 뿐 다시 지불하지 않습니다.' },
 } satisfies Dict;

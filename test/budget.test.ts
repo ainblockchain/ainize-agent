@@ -414,3 +414,34 @@ test('the spend file only appears once something is reserved', () => {
   b.reserve({ kind: 'queries', amount: 1, act: 'mcp_call' }).release('never mind');
   assert.equal(existsSync(spendFile(h)), true);
 });
+
+// ---------------------------------------------------------------- a report that measured the wrong currency
+test('money paid today in ANOTHER currency is named, so a report cannot answer "0 spent" for a day money moved', () => {
+  const h = home();
+  // A CREDIT market read with the module's default AIN denomination — what `agent budget` really did on 2026-09-07,
+  // the day the agent paid 0.5 CREDIT for pixelplus-demo and the report said "AIN: 0 spent".
+  purchase(h, '0.5', 'CREDIT', T);
+  const b = new AgentBudget(h, loadCaps({ home: h, flags: { money: '5' } }), { now: () => T, locale: 'en' });
+  const v = b.view('money', 'AIN');
+  assert.equal(v.spent, '0');                       // true of AIN, and true is not the same as complete
+  assert.deepEqual(v.other_currencies, [{ currency: 'CREDIT', amount: '0.5' }]);
+  const money = b.lines('AIN').filter((l) => /AIN|CREDIT/.test(l));
+  assert.match(money.join('\n'), /0\.5 CREDIT was paid today in another currency/);
+  assert.match(money.join('\n'), /--currency CREDIT/);
+  // …and asked in that currency the cap does its job, with nothing left over to report
+  const inCredit = b.view('money', 'CREDIT');
+  assert.equal(inCredit.spent, '0.5');
+  assert.equal(inCredit.remaining, '4.5');
+  assert.deepEqual(inCredit.other_currencies, []);
+  // the sentence exists in Korean too, with the same values in it
+  const ko = new AgentBudget(h, loadCaps({ home: h, flags: { money: '5' } }), { now: () => T, locale: 'ko' }).lines('AIN').join('\n');
+  assert.match(ko, /[가-힣]/);
+  assert.match(ko, /CREDIT 0\.5/);
+});
+
+test('yesterday\'s spend in another currency is not today\'s business', () => {
+  const h = home();
+  purchase(h, '9', 'CREDIT', T - DAY);
+  const b = new AgentBudget(h, loadCaps({ home: h, flags: { money: '5' } }), { now: () => T, locale: 'en' });
+  assert.deepEqual(b.view('money', 'AIN').other_currencies, []);
+});

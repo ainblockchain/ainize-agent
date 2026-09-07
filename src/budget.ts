@@ -242,6 +242,8 @@ export interface BudgetView {
   remaining: string | null;
   /** Reservations from an earlier run that were never settled or released. */
   unresolved: { count: number; amount: string; counted_as_spent: boolean };
+  /** Money only — what was paid TODAY in some other currency, which this cap does not measure. */
+  other_currencies?: { currency: string; amount: string }[];
   flag: string;
   day: string;
   resets_at: number;
@@ -403,6 +405,7 @@ export class AgentBudget {
       reserved: formatAmount(reserved),
       remaining: eff ? formatAmount(eff.cap - spent - reserved) : null,
       unresolved: { count: un.count, amount: formatAmount(un.amount), counted_as_spent: kind !== 'money' },
+      ...(kind === 'money' ? { other_currencies: this.otherCurrenciesToday(currency) } : {}),
       flag: BUDGET_FLAG[kind],
       day: dayKey(this.now),
       resets_at: resetsAt(this.now),
@@ -415,11 +418,26 @@ export class AgentBudget {
    * One line per unit for `agent budget`, in the agent's locale, plus a second line wherever an earlier run left a
    * reservation open — "why is a third of today's budget gone before I started" needs an answer on the same screen.
    */
+  /**
+   * What was paid today in a currency this view is NOT denominated in.
+   *
+   * The money cap is applied per currency (that is what `watch` already does), which is right for ENFORCEMENT and
+   * silently wrong for a REPORT: on a CREDIT market read with the default AIN denomination, `agent budget` answered
+   * "0 spent" for a day on which the agent had paid 0.5 CREDIT. Measured 2026-09-07 on a throwaway node.
+   */
+  otherCurrenciesToday(currency = this.currency): { currency: string; amount: string }[] {
+    return Object.entries(spentToday(this.home, this.now))
+      .filter(([c, n]) => c !== currency && Number.isFinite(n) && n > 0)
+      .map(([c, n]) => ({ currency: c, amount: formatAmount(parseAmount(n.toFixed(9))) }))
+      .sort((a, b) => a.currency.localeCompare(b.currency));
+  }
+
   lines(currency = this.currency): string[] {
     const out: string[] = [];
     for (const k of BUDGET_KINDS) {
       const { line, view } = this.probe(k, 0, currency);
       out.push(line);
+      if (k === 'money') for (const o of this.otherCurrenciesToday(currency)) out.push(this.t('line_other_currency', o));
       if (view.unresolved.count === 0) continue;
       out.push(k === 'money'
         ? this.t('unresolved_money_note', { count: view.unresolved.count, amount: view.unresolved.amount, currency })
