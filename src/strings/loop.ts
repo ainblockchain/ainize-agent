@@ -64,6 +64,10 @@ export const LOOP_STRINGS: Dict = {
   },
 
   // ---------------------------------------------------------------- the bake decision (§6)
+  'bake.failedAfterAnswer': {
+    en: 'the bake did not happen ({why}). Your answer stands and is already paid for — only the compile was lost.',
+    ko: '굽기가 실행되지 않았습니다 ({why}). 답변은 그대로이고 이미 값을 치렀습니다 — 컴파일만 무산됐습니다.',
+  },
   'bake.trigger': {
     en: 'this is lookup {n} of shape {shape}; N* = {nstar} from measurements {samples} — compiling it into memory.',
     ko: 'shape {shape} 조회가 {n}번째입니다. 측정 {samples}건으로 계산한 N* = {nstar} — 기억으로 컴파일합니다.',
@@ -71,6 +75,10 @@ export const LOOP_STRINGS: Dict = {
   'bake.trigger.declared': {
     en: 'this is lookup {n} of shape {shape}, and --bake-after {n_declared} was declared. This is a POLICY the owner set, not a measured break-even — N* is {nstar_state}.',
     ko: 'shape {shape} 조회가 {n}번째이고, --bake-after {n_declared} 가 지정되어 있습니다. 이것은 소유자가 정한 정책이며 측정된 손익분기점이 아닙니다 — N* 상태: {nstar_state}.',
+  },
+  'bake.blocked.novelty': {
+    en: 'shape {shape} was already compiled {bakes}x and only {since} new rows have arrived since (floor {floor}) — another lesson would compile the same facts again, and a lesson is not refunded.',
+    ko: 'shape {shape} 는 이미 {bakes}번 컴파일됐고 그 뒤로 새로 들어온 행이 {since}개뿐입니다 (최소 {floor}) — 다시 구우면 같은 사실을 또 컴파일하는 것이고, lesson 은 환불되지 않습니다.',
   },
   'bake.blocked.economic': {
     en: 'not baking {shape}: lookups {n} have not reached N* = {nstar}. Retrieving is still the cheaper of the two.',

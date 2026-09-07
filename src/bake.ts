@@ -19,6 +19,7 @@
  *     through a second copy of the pipeline.
  */
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
+import { join } from 'node:path';
 /**
  * TYPE-only at load time, on purpose, and measured: `@ngram/mcp/client` pulls the MCP SDK, and importing it took
  * this module from 12 ms to 483 ms. `ask` imports `shouldBake` from here for EVERY question — including the branch
@@ -210,7 +211,7 @@ export function nStar(s: MemoryShapeView, opts: { home?: string; bakeTotals?: nu
 
 // ------------------------------------------------------------------------------------------------ the gates
 
-export type GateName = 'economic' | 'material' | 'stability' | 'budget';
+export type GateName = 'economic' | 'novelty' | 'material' | 'stability' | 'budget';
 
 export interface BakeGate {
   name: GateName;
@@ -250,6 +251,30 @@ export interface BakeDecision {
  * All four gates, evaluated in full — the decision never short-circuits, so `agent memory --why` can print every
  * reason at once instead of the first one that happened to fail.
  */
+/**
+ * Distinct rows this shape had when it was LAST compiled, or null if it never was. Read from the append-only
+ * memory log rather than from the folded counters, because what the novelty gate needs is the row count at
+ * the moment of the bake — the folded view only carries how many bakes happened, which cannot answer
+ * "has anything arrived since". Returns null on any read problem: an unreadable log must not silently license
+ * a second bake, and the caller treats null as "never baked" only when s.bake.n is 0.
+ */
+export function lastBakeRows(s: MemoryShapeView, home?: string): number | null {
+  if (!s.bake.n) return null;
+  if (!home) return s.distinct_rows;   // cannot read the log: assume nothing new, which REFUSES a re-bake
+  try {
+    const file = join(home, 'memory.jsonl');
+    if (!existsSync(file)) return s.distinct_rows;
+    let rows: number | null = null;
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      let e: { kind?: string; shape?: string; rows?: number };
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e.kind === 'bake' && e.shape === s.shape && typeof e.rows === 'number') rows = e.rows;
+    }
+    return rows ?? s.distinct_rows;
+  } catch { return s.distinct_rows; }
+}
+
 export function shouldBake(s: MemoryShapeView, policy: BakePolicy = {}, opts: { home?: string; budget?: BudgetProbe; gpuSeconds?: number; bakeTotals?: number[] } = {}): BakeDecision {
   const maxChurn = policy.maxChurn ?? 0;
   const floor = policy.rowsFloor ?? ROWS_FLOOR_GRADIENT;
@@ -268,6 +293,27 @@ export function shouldBake(s: MemoryShapeView, policy: BakePolicy = {}, opts: { 
       : ns.computable
         ? { key: 'bake.blocked.economic', vars: { shape: short, n: s.lookups, nstar: String(ns.n_star) } }
         : { key: 'bake.blocked.nstar', vars: { shape: short, missing: ns.missing.join('; ') } },
+  };
+
+  // ---- novelty: has this shape already been compiled, and has anything arrived since?
+  //
+  // Without this gate the loop bakes the same shape for ever. runBake neither applies nor publishes the
+  // engram, so nothing about the world changes afterwards: the next question of this shape misses memory,
+  // retrieves, and arrives here with `lookups` one HIGHER than the run that just baked — so every gate that
+  // passed still passes, and each pass spends a lesson that the node does not refund. Measured against
+  // --bake-after 3, lookup 3 bakes, then 4, then 5, until the lesson cap refuses.
+  //
+  // What makes a second bake legitimate is NEW MATERIAL, not another lookup: rows this shape did not have
+  // when it was last compiled. `distinct_rows` at bake time is recorded in the bake event, so the comparison
+  // is against what was actually compiled rather than against a count of attempts.
+  const bakedRows = lastBakeRows(s, opts.home);
+  const novelRows = bakedRows === null ? s.distinct_rows : s.distinct_rows - bakedRows;
+  const novelty: BakeGate = {
+    name: 'novelty',
+    ok: bakedRows === null || novelRows >= floor,
+    detail: { bakes: s.bake.n, rows_at_last_bake: bakedRows, new_rows_since: bakedRows === null ? null : novelRows, floor },
+    refusal: bakedRows === null || novelRows >= floor ? null
+      : { key: 'bake.blocked.novelty', vars: { shape: short, bakes: s.bake.n, since: novelRows, floor } },
   };
 
   // ---- material
@@ -300,7 +346,7 @@ export function shouldBake(s: MemoryShapeView, policy: BakePolicy = {}, opts: { 
     refusal: overBudget ? { key: 'bake.blocked.budget', vars: { shape: short, kind: overBudget.kind, detail: overBudget.line } } : null,
   };
 
-  const gates = [economic, material, stability, budget];
+  const gates = [economic, novelty, material, stability, budget];
   const failed = gates.find((g) => !g.ok);
   if (failed) return { shape: s.shape, bake: false, trigger: null, gates, nstar: ns, say: failed.refusal! };
   const trigger: 'measured' | 'declared' = measuredOk ? 'measured' : 'declared';

@@ -96,7 +96,8 @@ export interface AskResult {
   runtime: { ok: boolean; model: string | null; api: string | null; layers: number; error?: string };
   bought: AgentResult | null;
   retrieved: import('./retrieve.js').RetrieveResult | null;
-  bake: { decision: BakeDecision; result: BakeRun | null } | null;
+  /** `failed` is set when the bake threw AFTER the question was answered: the answer stands, the compile did not. */
+  bake: { decision: BakeDecision; result: BakeRun | null; failed?: string } | null;
   budget: BudgetView[];
   refusal: { kind: string; code: string; flag: string | null; message: string } | null;
   steps: string[];
@@ -174,26 +175,53 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
     const view = memory.view({ shape }).shapes.find((s) => s.shape === shape) ?? null;
     if (!view) return null;
     const policy: BakePolicy = { bakeAfter: o.bakeAfter ?? null, maxChurn: o.maxChurn ?? 0 };
-    const gpu = Number(o.gpuSecondsPerLesson ?? 0);
+    // G4 must probe the amount runBake will actually HOLD. runBake reserves trainerWorstCaseSeconds(NODE
+    // policy, flag) — the node's declared trainer_timeout_s when the flag is unset — and this function does
+    // not have the node's policy, only the BakePolicy. Probing `Number(flag ?? 0)` made G4 short-circuit on
+    // 0 and PASS, after which the reserve refused on the real worst case: the invariant that all four gates
+    // are checked before anything is reserved was broken, and a bake was announced that did not happen.
+    //
+    // So: with the flag, probe exactly what will be held. Without it, the worst case is UNKNOWN here, and an
+    // unknown amount is not a passing gate — G4 says so and no bake is announced. That agrees with runBake,
+    // which refuses on `!worst` for every backend but stub.
+    const gpu = o.gpuSecondsPerLesson === undefined ? null : Number(o.gpuSecondsPerLesson);
     const probe: BudgetProbe = (kind, amount) => {
       const v = budget.view(kind);
+      // An UNKNOWN gpu worst case reaches here as NaN. It is not zero and must not pass: runBake would hold
+      // the node's trainer_timeout_s, an amount this gate never checked.
+      if (kind === 'gpu_s' && !Number.isFinite(amount)) {
+        return { ok: false, line: `${v.unit}: worst case unknown here — pass --gpu-seconds-per-lesson, or the node's trainer timeout is what would be held` };
+      }
       if (amount <= 0) return { ok: true, line: '' };
       if (v.remaining === null) return { ok: false, line: `${v.unit}: no cap set — ${v.flag} would set one` };
       return { ok: Number(v.remaining) >= amount, line: `${v.unit}: ${amount} needed, ${v.remaining} of ${v.effective_cap} left today` };
     };
-    const decision = shouldBake(view, policy, { home, budget: probe, gpuSeconds: gpu });
+    const decision = shouldBake(view, policy, { home, budget: probe, gpuSeconds: gpu === null ? NaN : gpu });
     say('[4] ' + t(decision.say.key, decision.say.vars));
     let result: BakeRun | null = null;
     if (decision.bake) {
       const B: BakeRunModule = await import('./bake.js');
-      result = await B.runBake({
-        shape: view.shape, market, home, memory, budget, locale,
-        ...(o.gpuSecondsPerLesson !== undefined ? { gpuSecondsPerLesson: o.gpuSecondsPerLesson } : {}),
-        ...(o.privateKey ? { privateKey: o.privateKey } : {}),
-        log: (l) => say('    ' + l),
-      });
-      cost.lessons += result.lesson_spent ? 1 : 0;
-      cost.gpu_s = result.gpu_seconds_settled;
+      // A BAKE IS AN OPTIMISATION, NEVER A REASON TO LOSE THE ANSWER. By the time we are here the question
+      // has been answered and an upstream query has usually been PAID FOR; letting runBake throw unwinds out
+      // of ask(), skips finish(), never flushes memory, and hands the caller exit 2 with nothing — so the
+      // owner pays for a lookup and gets neither the answer nor the engram. runBake can throw for reasons the
+      // gates could not have known: the node tightening jobs_per_key_per_day under us, a node-supplied cap
+      // that is zero or negative, an MCP import failing. Every one of those is a bake that did not happen,
+      // which is exactly what `bake: { ran: false, why }` already means.
+      try {
+        result = await B.runBake({
+          shape: view.shape, market, home, memory, budget, locale,
+          ...(o.gpuSecondsPerLesson !== undefined ? { gpuSecondsPerLesson: o.gpuSecondsPerLesson } : {}),
+          ...(o.privateKey ? { privateKey: o.privateKey } : {}),
+          log: (l) => say('    ' + l),
+        });
+        cost.lessons += result.lesson_spent ? 1 : 0;
+        cost.gpu_s = result.gpu_seconds_settled;
+      } catch (e) {
+        const why = e instanceof BudgetRefusal ? e.message : `${(e as Error)?.name ?? 'Error'}: ${(e as Error)?.message ?? String(e)}`;
+        say('    ' + t('bake.failedAfterAnswer', { why }));
+        return { decision, result: null, failed: why };
+      }
     }
     return { decision, result };
   };
