@@ -19,12 +19,20 @@
  *     through a second copy of the pipeline.
  */
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
-import { Context, loadConfig, runTeachLesson, type TeachLessonResult, type TeachPolicy } from '@ngram/mcp/client';
+/**
+ * TYPE-only at load time, on purpose, and measured: `@ngram/mcp/client` pulls the MCP SDK, and importing it took
+ * this module from 12 ms to 483 ms. `ask` imports `shouldBake` from here for EVERY question — including the branch
+ * whose whole claim is "no query, no completion, no cost" — so half a second of SDK loading on a cache hit would
+ * make the loop's cheapest path its slowest. The value import happens inside `runBake`, on the one branch that is
+ * about to spend a lesson and a block of GPU time anyway.
+ */
+import type { TeachLessonResult, TeachPolicy } from '@ngram/mcp/client';
 import { BudgetRefusal, trainerWorstCaseSeconds, type AgentBudget } from './budget.js';
 import { agentLocale, translator, type Locale } from './i18n.js';
 import { loadIdentity } from './identity.js';
 import { memoryFile, type AgentMemory, type BakePayload, type MemoryEvent, type MemoryShapeView } from './memory.js';
-import { datasetForShape, shapeFiles } from './retrieve.js';
+// Also type-only at load time: `retrieve.ts` imports the MCP client, and this module is on `ask`'s hot path.
+import type { ShapeDataset } from './retrieve.js';
 import { LOOP_STRINGS } from './strings/loop.js';
 
 /**
@@ -349,8 +357,10 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
   const now = o.now ?? Date.now;
   const short = o.shape.slice(0, 12);
   const identity = loadIdentity(o.home, o.privateKey);
+  const { Context, loadConfig, runTeachLesson } = await import('@ngram/mcp/client');
+  const { datasetForShape, shapeFiles } = await import('./retrieve.js');
 
-  const ds = datasetForShape(o.home, o.shape);
+  const ds: ShapeDataset = datasetForShape(o.home, o.shape);
   if (!ds.rows.length) {
     log(t('bake.blocked.noRows', { shape: short }));
     return {
