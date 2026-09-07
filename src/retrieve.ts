@@ -166,7 +166,7 @@ export function readShapeDescriptor(home: string, shape: string): StoredShape | 
 }
 
 /** Rows and the sealed record, appended. One `write()` each, so two agent processes interleave lines, never bytes. */
-function appendRetrieved(home: string, shape: string, rows: TeachRow[], provenance: RowProvenance, meta: { plan_id: string; slots: Record<string, string>; at: number }): { rows_file: string; provenance_file: string } {
+function appendRetrieved(home: string, shape: string, rows: TeachRow[], provenance: RowProvenance, meta: { plan_id: string; slots: Record<string, string>; at: number; row_keys: string[]; row_keys_omitted: number }): { rows_file: string; provenance_file: string } {
   const files = shapeFiles(home, shape);
   if (rows.length) {
     appendFileSync(files.rows, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', { mode: 0o600 });
@@ -248,6 +248,47 @@ export function provenanceForShape(home: string, shape: string): ShapeProvenance
     } else out.retrievals_omitted += 1;
   }
   return out.calls ? out : null;
+}
+
+/** How many row keys one stored call may name. Above it `priorCall` refuses rather than answering from a partial list. */
+export const PRIOR_CALL_KEYS_MAX = 64;
+
+export interface PriorCall {
+  shape: string;
+  arguments_sha256: string;
+  slots: Record<string, string>;
+  at: number;
+  row_keys: string[];
+}
+
+/**
+ * The most recent call of THIS shape with THESE arguments, if this agent has already made one.
+ *
+ * The retroactive counter (`refetched`) proves after the fact that the agent paid twice for one fact. This is the
+ * same evidence BEFORE the money moves: the plan bound the same slots, so the query about to be sent is byte for
+ * byte the query that was already answered. Measured 2026-09-07: six declared phrasings of "LINK contract address"
+ * — all six in the plan's own match patterns, all six binding {symbol: LINK} — cost six upstream queries and
+ * reported `refetched 5`.
+ *
+ * A call whose row-key list was truncated returns `null`: a partial list cannot show that everything it produced is
+ * still known.
+ */
+export function priorCall(home: string, shape: string, argumentsSha256: string): PriorCall | null {
+  const file = shapeFiles(home, shape).provenance;
+  if (!existsSync(file)) return null;
+  let best: PriorCall | null = null;
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    let rec: { slots?: Record<string, string>; at?: number; row_keys?: unknown; row_keys_omitted?: number; provenance?: { arguments_sha256?: string } };
+    try { rec = JSON.parse(line) as typeof rec; } catch { continue; }
+    if (rec.provenance?.arguments_sha256 !== argumentsSha256) continue;
+    if (rec.row_keys_omitted) continue;
+    if (!Array.isArray(rec.row_keys)) continue;   // written before this field existed — no claim can be made from it
+    const at = rec.at ?? 0;
+    if (best && best.at >= at) continue;
+    best = { shape, arguments_sha256: argumentsSha256, slots: rec.slots ?? {}, at, row_keys: rec.row_keys.filter((k): k is string => typeof k === 'string') };
+  }
+  return best;
 }
 
 export interface ShapeDataset {
@@ -488,7 +529,13 @@ export async function retrieve(o: RetrieveOptions): Promise<RetrieveResult> {
 
     mkdirSync(retrievedDir(o.home), { recursive: true, mode: 0o700 });
     writeShapeDescriptor(o.home, shape, descriptor, o.plan.id, at);
-    const files = appendRetrieved(o.home, shape, rows, provenance, { plan_id: o.plan.id, slots: bound.slots, at });
+    const files = appendRetrieved(o.home, shape, rows, provenance, {
+      plan_id: o.plan.id, slots: bound.slots, at,
+      // The row keys this exact call produced, so a LATER identical call can be answered from memory instead of paid
+      // for again. Capped, and the overflow is counted rather than dropped in silence — an incomplete list must not
+      // be mistaken for a short one (`priorCall` refuses on it).
+      row_keys: keys.slice(0, PRIOR_CALL_KEYS_MAX), row_keys_omitted: Math.max(0, keys.length - PRIOR_CALL_KEYS_MAX),
+    });
     const held = datasetForShape(o.home, shape);
 
     const event: RetrieveEvent = {

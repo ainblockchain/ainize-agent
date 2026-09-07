@@ -104,6 +104,16 @@ export interface AskResult {
   success: boolean;
 }
 
+/** "3 minutes", "2 days" — for the line that says how long ago the identical call was made. */
+function humanAge(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m}m`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+
 /** Only `already_known` and `loaded` mean the knowledge is on the model; `ask` does not treat a download as an answer. */
 const boughtAndLoaded = (r: AgentResult): boolean => r.outcome === 'loaded' || r.applied;
 
@@ -298,9 +308,31 @@ export async function ask(o: AskOptions, log: (line: string) => void = () => {})
       for (const l of R.explainNoPlan(usable, chosen, locale)) say('    ' + l);
     } else {
       const { plan, slots } = chosen.candidate;
+      const bound = P.bindPlan(plan, slots);
+      const planShapeKey = P.shapeOf(bound);
+      /*
+       * Has this agent already sent THIS call?
+       *
+       * `refetched` is the same evidence after the money has moved. Here it is available before: the plan bound the
+       * same slots, so the query about to leave is byte for byte one that was already answered, and the fact it
+       * produced is still in memory. Measured 2026-09-07: six declared phrasings of "LINK contract address", every
+       * one of them in the plan's own match patterns and every one binding {symbol: LINK}, cost six upstream
+       * queries. It fires only on a call that produced exactly ONE fact and only while that fact is still `known`
+       * — with several rows there is no evidence about WHICH of them this question wanted, and the agent pays
+       * rather than guesses.
+       */
+      const prior = R.priorCall(home, planShapeKey, P.argumentsSha256(bound.arguments));
+      const priorRow = prior && prior.row_keys.length === 1 ? memory.index.rows[prior.row_keys[0]] : null;
+      if (prior && priorRow && priorRow.state === 'known') {
+        say('[3] ' + t('ask.plan.alreadyPulled', { plan: plan.id, slots: JSON.stringify(slots), ago: humanAge(started - prior.at) }));
+        memory.learnAsked({ question: o.question, answer: priorRow.answer, canonical: prior.row_keys[0], shape: priorRow.shape });
+        memory.recordRecall({ row_key: base.row_key, shape: priorRow.shape, hit: true, via: 'memory', engram: priorRow.engram, stack_fp: stackFp, ms: 0, answer: priorRow.answer });
+        say('    ' + t('ask.answer.memory', { engram: priorRow.engram ?? 'memory', date: new Date(priorRow.learned_at).toISOString().slice(0, 10) }));
+        return finish({ answer: priorRow.answer, via: 'memory', engram: priorRow.engram, shape: priorRow.shape, recall, bought, retrieved: null, bake: null, refusal: null, outcome: 'memory', success: true });
+      }
       // Announced BEFORE the call, not after it: the line says what is about to be spent, and a retrieval that
       // hangs or fails must still leave a record of which plan and which slots were about to be sent.
-      say('[3] ' + t('ask.plan.matched', { plan: plan.id, shape: P.shortShape(P.shapeOf(P.bindPlan(plan, slots))), slots: JSON.stringify(slots) }));
+      say('[3] ' + t('ask.plan.matched', { plan: plan.id, shape: P.shortShape(planShapeKey), slots: JSON.stringify(slots) }));
       try {
         retrieved = await R.retrieve({
           plan, slots, home, locale, log: (l) => say('    ' + l),

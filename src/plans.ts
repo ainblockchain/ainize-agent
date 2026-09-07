@@ -23,7 +23,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stableJson, type RowMapping } from '@ngram/mcp/client';
+import { argumentsSha256, stableJson, type RowMapping } from '@ngram/mcp/client';
+
+/** Re-exported so the loop can hash a bound call without importing the MCP client itself (and its SDK) to do it. */
+export { argumentsSha256 };
 
 // ------------------------------------------------------------------------------------------------ the schema
 

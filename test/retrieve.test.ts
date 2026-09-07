@@ -11,13 +11,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { argumentsSha256, McpDataSourceError, type McpCallResult } from '@ngram/mcp/client';
+import { argumentsSha256, McpDataSourceError, promptKey, type McpCallResult } from '@ngram/mcp/client';
 import { builtinPlansDir, loadPlans, parsePlan, type AgentPlan } from '../src/plans.js';
 import {
-  capProvenance, datasetForShape, explainNoPlan, planForQuestion, retrieve, shapeFiles,
+  capProvenance, datasetForShape, explainNoPlan, planForQuestion, priorCall, retrieve, shapeFiles,
   type BudgetHold, type LearnEvent, type QueryBudget, type RetrieveEvent, type RetrievalSource, type RetrieveMemory,
 } from '../src/retrieve.js';
 
@@ -338,4 +338,42 @@ test('live: the shipped plan answers a real question against The Graph, once, an
   assert.equal(out.queries, 1);
   assert.equal(budget.spent, 1);
   assert.equal(datasetForShape(h, out.shape).rows.length, out.rows.length);
+});
+
+// ------------------------------------------------------------------ the call this agent has already paid for
+
+test('a call already made is findable before the money moves, and a different one is not', async () => {
+  const h = home();
+  const first = await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', memory: fakeMemory(), source: fakeSource(TOKENS(USDC)) });
+  const prior = priorCall(h, first.shape, first.provenance.arguments_sha256);
+  assert.ok(prior, 'the call this agent just made is not on file');
+  assert.deepEqual(prior.slots, { symbol: 'USDC' });
+  // the shipped plan takes one token per ticker, so one call is one fact — which is the case the shortcut fires on
+  assert.equal(prior.row_keys.length, 1);
+  assert.equal(prior.row_keys[0], promptKey(first.rows[0]));
+  // a DIFFERENT argument is a different call, and nothing about it has been paid for
+  assert.equal(priorCall(h, first.shape, 'not-the-same-arguments'), null);
+});
+
+test('a stored call whose row-key list was truncated makes no claim at all', () => {
+  const h = home();
+  const shape = 'c'.repeat(64);
+  mkdirSync(join(h, 'retrieved'), { recursive: true });
+  appendFileSync(shapeFiles(h, shape).provenance, JSON.stringify({
+    plan_id: 'p', slots: {}, at: 1, shape,
+    row_keys: ['k1'], row_keys_omitted: 3,
+    provenance: { arguments_sha256: 'args', rows_sha256: 'r', rows: 4 },
+  }) + '\n');
+  // a partial list cannot show that everything the call produced is still known, so it is not evidence
+  assert.equal(priorCall(h, shape, 'args'), null);
+});
+
+test('a call written before row keys were recorded is not mistaken for one that returned nothing', () => {
+  const h = home();
+  const shape = 'd'.repeat(64);
+  mkdirSync(join(h, 'retrieved'), { recursive: true });
+  appendFileSync(shapeFiles(h, shape).provenance, JSON.stringify({
+    plan_id: 'p', slots: {}, at: 1, shape, provenance: { arguments_sha256: 'args', rows_sha256: 'r', rows: 1 },
+  }) + '\n');
+  assert.equal(priorCall(h, shape, 'args'), null);
 });

@@ -50,6 +50,14 @@ export const LOOP_STRINGS: Dict = {
     en: 'no retrieval plan matches this question. A plan collects the phrasings it was told about; it does not guess. Plans loaded: {plans}',
     ko: '이 질문에 맞는 조회 계획이 없습니다. 계획은 미리 적어 둔 표현만 알아보며, 뜻을 추측하지 않습니다. 불러온 계획: {plans}',
   },
+  /**
+   * A plan matched, bound the same slots as a call this agent has already paid for, and the fact it produced is
+   * still in memory. The upstream query is not sent.
+   */
+  'ask.plan.alreadyPulled': {
+    en: 'plan {plan} matches and binds {slots} — the same call this agent already made {ago} ago, and what it returned is still in memory. No query.',
+    ko: '플랜 {plan} 이 일치하며 {slots} 로 묶입니다 — {ago} 전에 이미 보낸 것과 같은 호출이고, 그때 받은 사실이 아직 기억에 있습니다. 조회 없음.',
+  },
   'ask.plan.matched': {
     en: 'plan {plan} matches — shape {shape}, slots {slots}',
     ko: '계획 {plan}에 해당합니다 — shape {shape}, 슬롯 {slots}',
