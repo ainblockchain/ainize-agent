@@ -187,8 +187,10 @@ test('the budget is the last gate and refuses with the budget\'s own sentence', 
 test('every gate is evaluated, so one command can print every reason at once', () => {
   const d = shouldBake(shape({ lookups: 1, distinct_rows: 2, refetched: 2, churned: 2, churn_rate: 1 }), {}, { bakeTotals: [] });
   assert.equal(d.bake, false);
-  assert.equal(d.gates.length, 4);
-  assert.deepEqual(d.gates.map((g) => [g.name, g.ok]), [['economic', false], ['material', false], ['stability', false], ['budget', true]]);
+  assert.equal(d.gates.length, 5);
+  // `novelty` passes here because this shape has never been baked — it only refuses a SECOND compile of the
+  // same material. A shape with bake.n > 0 and no new rows since is covered by its own test below.
+  assert.deepEqual(d.gates.map((g) => [g.name, g.ok]), [['economic', false], ['novelty', true], ['material', false], ['stability', false], ['budget', true]]);
   for (const g of d.gates) if (!g.ok) assert.ok(g.refusal, `${g.name} failed with no sentence`);
 });
 
@@ -293,4 +295,18 @@ test('a shell metacharacter in a description cannot break out of the command', (
   assert.ok(desc, `no quoted description in: ${cmd}`);
   assert.match(cmd, /\\"; rm -rf \/; echo \\"/);
   assert.equal(cmd.split('--consent-permanent').length, 2);
+});
+
+test('a shape already compiled is not compiled again until new material arrives', () => {
+  // The loop's own arithmetic makes a re-bake look attractive: runBake neither applies nor publishes, so the
+  // next question of this shape misses memory, retrieves, and arrives with `lookups` one HIGHER — every gate
+  // that passed passes again, and each pass spends a lesson the node does not refund.
+  const baked = shape({ lookups: 9, distinct_rows: 10, refetched: 0, churned: 0, churn_rate: 0 });
+  baked.bake = { n: 1, total_s: 100, jobs: ['job-1'] };
+  const d = shouldBake(baked, { bakeAfter: 3 }, { bakeTotals: [100] });
+  const novelty = d.gates.find((g) => g.name === 'novelty');
+  assert.ok(novelty, 'the novelty gate is evaluated');
+  assert.equal(novelty.ok, false, 'a shape with no new rows since its last bake must not bake again');
+  assert.ok(novelty.refusal, 'the refusal says why, in a sentence');
+  assert.equal(d.bake, false);
 });
