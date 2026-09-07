@@ -21,7 +21,21 @@ import {
   type BudgetHold, type LearnEvent, type QueryBudget, type RetrieveEvent, type RetrievalSource, type RetrieveMemory,
 } from '../src/retrieve.js';
 
+const RAW = JSON.parse(readFileSync(join(builtinPlansDir(), 'graph-erc20.json'), 'utf8')) as Record<string, unknown>;
 const ERC20 = loadPlans({ dirs: [builtinPlansDir()] }).plans.find((p) => p.id === 'graph/erc20-address-by-symbol') as AgentPlan;
+
+/**
+ * The counters are about many facts arriving from one call, and the shipped plan deliberately takes ONE token per
+ * ticker (a permissionless subgraph answers `symbol: "USDC"` with impostors too). So the counter tests use a plan of
+ * their own that pages three, rather than pinning this file to the shipped plan's page size — which is not part of
+ * the shape and may be tuned again.
+ */
+const ERC20_3 = parsePlan({
+  ...RAW,
+  id: 'local/erc20-three',
+  arguments: { ...(RAW.arguments as Record<string, unknown>), query: '{ _meta { block { number } } tokens(where: {symbol: "{symbol}"}, first: 3, orderBy: txCount, orderDirection: desc) { id symbol name decimals } }' },
+  mapping: { ...(RAW.mapping as Record<string, unknown>), max_rows: 3 },
+});
 
 const TOKENS = (usdc: string) => ({
   data: {
@@ -93,17 +107,17 @@ test('the first pull is all new; the second is all refetched; a changed answer i
   const memory = fakeMemory();
   const budget = fakeBudget(10);
 
-  const first = await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget, memory, source: fakeSource(TOKENS(USDC)) });
+  const first = await retrieve({ plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget, memory, source: fakeSource(TOKENS(USDC)) });
   assert.equal(first.rows.length, 3);
   assert.deepEqual([first.new_rows, first.refetched, first.churned], [3, 0, 0]);
   assert.equal(first.primary?.answer, USDC);
   assert.match(first.primary?.prompt ?? '', /USD Coin \(USDC\)/, 'the row says which fact answered');
 
-  const second = await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget, memory, source: fakeSource(TOKENS(USDC)) });
+  const second = await retrieve({ plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget, memory, source: fakeSource(TOKENS(USDC)) });
   assert.deepEqual([second.new_rows, second.refetched, second.churned], [0, 3, 0], 'this agent has now paid twice for the same three facts');
   assert.equal(second.shape, first.shape, 'and it is the same shape, so the counter can see it');
 
-  const moved = await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget, memory, source: fakeSource(TOKENS('0x1111111111111111111111111111111111111111')) });
+  const moved = await retrieve({ plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget, memory, source: fakeSource(TOKENS('0x1111111111111111111111111111111111111111')) });
   assert.deepEqual([moved.new_rows, moved.refetched, moved.churned], [0, 3, 1], 'one answer moved underneath');
 
   const events = memory.events.filter((e) => e.kind === 'retrieve') as RetrieveEvent[];
@@ -117,9 +131,9 @@ test('the first pull is all new; the second is all refetched; a changed answer i
 test('a different entity is the same shape and lands in the same row set', async () => {
   const h = home();
   const memory = fakeMemory();
-  const a = await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', memory, source: fakeSource(TOKENS(USDC)) });
+  const a = await retrieve({ plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', memory, source: fakeSource(TOKENS(USDC)) });
   const b = await retrieve({
-    plan: ERC20, slots: { symbol: 'WBTC' }, home: h, budget: 'unmetered', memory,
+    plan: ERC20_3, slots: { symbol: 'WBTC' }, home: h, budget: 'unmetered', memory,
     source: fakeSource({ data: { _meta: { block: { number: 25903090 } }, tokens: [{ id: '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599', symbol: 'WBTC', name: 'Wrapped BTC', decimals: 8 }] } }),
   });
   assert.equal(b.shape, a.shape);
@@ -132,8 +146,8 @@ test('a different entity is the same shape and lands in the same row set', async
 test('the freshest answer wins in the dataset a bake would train on', async () => {
   const h = home();
   const memory = fakeMemory();
-  await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', memory, source: fakeSource(TOKENS(USDC)) });
-  await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', memory, source: fakeSource(TOKENS('0x9999999999999999999999999999999999999999')) });
+  await retrieve({ plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', memory, source: fakeSource(TOKENS(USDC)) });
+  await retrieve({ plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', memory, source: fakeSource(TOKENS('0x9999999999999999999999999999999999999999')) });
   const { rows } = datasetForShape(h, (await Promise.resolve(memory.events.find((e) => e.kind === 'retrieve') as RetrieveEvent)).shape);
   assert.equal(rows.length, 3);
   assert.equal(rows[0]?.answer, '0x9999999999999999999999999999999999999999');
@@ -143,7 +157,7 @@ test('the freshest answer wins in the dataset a bake would train on', async () =
 
 test('the rows are pinned to the block of the very answer they came from', async () => {
   const h = home();
-  const out = await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', source: fakeSource(TOKENS(USDC)) });
+  const out = await retrieve({ plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered', source: fakeSource(TOKENS(USDC)) });
   assert.equal(out.provenance.upstream?.block, 25903086);
   assert.equal(out.provenance.upstream?.subgraph_id, '5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV');
   assert.deepEqual(out.unpinned, []);
@@ -163,7 +177,7 @@ test('the rows are pinned to the block of the very answer they came from', async
 test('an answer that cannot pin the rows says so instead of inventing a block', async () => {
   const h = home();
   const out = await retrieve({
-    plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered',
+    plan: ERC20_3, slots: { symbol: 'USDC' }, home: h, budget: 'unmetered',
     source: fakeSource({ data: { tokens: TOKENS(USDC).data.tokens } }),
   });
   assert.deepEqual(out.unpinned, ['block']);
@@ -199,7 +213,7 @@ test('a second phrasing two different answers both claim is dropped, and the row
   // Measured live on 2026-09-07: `symbol: "WETH"` on Uniswap v3 returns "Wrapped Ether" AND "Wrapped Ether from
   // PulseChain". Their English prompts differ by name; a Korean alternative written without the name does not.
   const plan = parsePlan({
-    ...(JSON.parse(readFileSync(join(builtinPlansDir(), 'graph-erc20.json'), 'utf8')) as Record<string, unknown>),
+    ...RAW,
     id: 'local/colliding-alt',
     mapping: {
       path: 'data.tokens', prompt: 'What is the contract address of the {name} ({symbol}) token?', answer: '{id}',
@@ -263,7 +277,7 @@ test('a query that left and failed is counted; one that never left is given back
   // stack is a test that hangs somebody else's suite.
   const unreachable = fakeBudget(10);
   const offline = parsePlan({
-    ...(JSON.parse(readFileSync(join(builtinPlansDir(), 'graph-erc20.json'), 'utf8')) as Record<string, unknown>),
+    ...RAW,
     id: 'local/unreachable',
     server: { name: 'nowhere', transport: 'stdio', command: '/nonexistent/ainize-no-such-mcp-server' },
   });
@@ -318,7 +332,7 @@ test('live: the shipped plan answers a real question against The Graph, once, an
   const h = home();
   const budget = fakeBudget(1);
   const out = await retrieve({ plan: ERC20, slots: { symbol: 'USDC' }, home: h, budget, log: (l) => console.log('   ' + l) });
-  assert.ok(out.rows.length >= 1, 'the query found the token');
+  assert.equal(out.rows.length, 1, 'the shipped plan takes the most-traded token for the ticker, not every impostor');
   assert.match(out.primary?.answer ?? '', /^0x[0-9a-f]{40}$/);
   assert.equal(typeof out.provenance.upstream?.block, 'number');
   assert.equal(out.queries, 1);

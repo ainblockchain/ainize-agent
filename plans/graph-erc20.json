@@ -1,6 +1,6 @@
 {
   "id": "graph/erc20-address-by-symbol",
-  "description": "ERC-20 token identity (contract address, name, decimals) by ticker, from The Graph's hosted Subgraph MCP against Uniswap v3 on Ethereum mainnet. Every field it teaches is immutable — an address, a symbol, a name, a decimals count. A price or a TVL would change every block, and a fact that changes every block is retrieval, not memory. The subgraph is named here rather than searched for because the Subgraph MCP's own ranking signal (get_deployment_30day_query_counts) answered 0 for every candidate when this plan was written, and that server's instructions say to ask rather than guess when volumes cannot decide; naming it also spends one query per question instead of four.",
+  "description": "ERC-20 token identity (contract address, name, decimals) by ticker, from The Graph's hosted Subgraph MCP against Uniswap v3 on Ethereum mainnet. Every field it teaches is immutable — an address, a symbol, a name, a decimals count. A price or a TVL would change every block, and a fact that changes every block is retrieval, not memory. The subgraph is named here rather than searched for because the Subgraph MCP's own ranking signal (get_deployment_30day_query_counts) answered 0 for every candidate when this plan was written, and that server's instructions say to ask rather than guess when volumes cannot decide; naming it also spends one query per question instead of four. It takes ONE token per ticker, the most-traded one: the subgraph is permissionless, so a ticker is not an identity — asking for USDC on 2026-09-07 also returned an impostor at 0x9abc68b3 with an obscene name and a Wormhole-bridged USD Coin (PoS), both of which are true rows and neither of which anybody wants compiled into a model. Trading volume is the only signal this schema offers for telling the canonical token apart, so that is what is used, and it is a heuristic rather than a proof. The page size is not part of the shape, so this choice does not reset the lookup counter.",
   "server": {
     "name": "subgraph-mcp",
     "transport": "sse",
@@ -11,7 +11,7 @@
   "tool": "execute_query_by_subgraph_id",
   "arguments": {
     "subgraph_id": "5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
-    "query": "{ _meta { block { number } } tokens(where: {symbol: \"{symbol}\"}, first: 3, orderBy: txCount, orderDirection: desc) { id symbol name decimals } }"
+    "query": "{ _meta { block { number } } tokens(where: {symbol: \"{symbol}\"}, first: 1, orderBy: txCount, orderDirection: desc) { id symbol name decimals } }"
   },
   "mapping": {
     "path": "data.tokens",
@@ -20,7 +20,7 @@
     "alt_prompt": "{chain_ko} {name} ({symbol}) 토큰의 컨트랙트 주소는?",
     "require": ["id", "symbol", "name"],
     "constants": { "chain": "Ethereum mainnet", "chain_ko": "이더리움 메인넷" },
-    "max_rows": 3
+    "max_rows": 1
   },
   "upstream": {
     "subgraph_id": "5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
