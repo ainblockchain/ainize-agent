@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { CatalogEntry } from '@ngram/core';
+import type { CatalogEntry } from '@ainize/core';
 import { matchesAsWord, pickPatch } from '../src/agent.js';
 
 const entry = (o: { id: string; name: string; description?: string; schema?: string; topic?: string; price?: string }): CatalogEntry => ({

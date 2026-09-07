@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * `ainize-agent` (alias `ngram-agent`) — autonomous knowledge buyer for the Ainize marketplace: notices the model
+ * `ainize-agent` — autonomous knowledge buyer for the Ainize marketplace: notices the model
  * does not know something, buys a verified knowledge patch with automatic payment (HTTP 402) and loads it.
  */
 import './quiet.js';
 import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import chalk from 'chalk';
@@ -47,10 +46,9 @@ async function marketCurrency(market: string): Promise<string | null> {
 const list = (v: string | string[] | undefined): string[] =>
   (Array.isArray(v) ? v : v ? [v] : []).flatMap((x) => String(x).split(',')).map((x) => x.trim()).filter(Boolean);
 
-// Two bins point here: `ainize-agent` (product name, Ainize = AI + -ize) and the historical `ngram-agent`.
-const PROG_NAMES = ['ainize-agent', 'ngram-agent'];
-const argv1 = basename(process.argv[1] ?? '').replace(/\.(c|m)?js$/, '');
-const PROG = PROG_NAMES.includes(argv1) ? argv1 : 'ainize-agent';
+// One bin points here: `ainize-agent` (Ainize = AI + -ize). The historical `ngram-agent` alias went with the
+// move to the `@ainize` scope.
+const PROG = 'ainize-agent';
 
 const cli = yargs(hideBin(process.argv))
   .scriptName(PROG)
@@ -60,7 +58,7 @@ const cli = yargs(hideBin(process.argv))
     'serving model, buys a verified knowledge patch from an Ainize node with automatic payment',
     '(HTTP 402 / x402) and loads it into the running model.',
   ].join('\n'))
-  .option('market', { type: 'string', describe: 'marketplace node URL', default: process.env.NGRAM_MARKET ?? 'http://localhost:3402', global: true })
+  .option('market', { type: 'string', describe: 'marketplace node URL', default: process.env.AINIZE_MARKET ?? 'http://localhost:3402', global: true })
   .option('home', { type: 'string', describe: 'agent home (identity, downloads)', default: undefined, global: true })
   .option('json', { type: 'boolean', default: false, global: true })
   .alias('h', 'help').help().version().strict().wrap(Math.min(110, process.stdout.columns || 100))

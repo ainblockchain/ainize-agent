@@ -9,7 +9,7 @@
  *
  * TWO COPIES, ONE AUTHORITY EACH, AND NEITHER IS EVER EDITED TO MATCH THE OTHER (§2):
  *
- *   <NGRAM_AGENT_HOME>/memory.jsonl        authority on what THIS AGENT knows, owns, retrieved, paid and baked
+ *   <AINIZE_AGENT_HOME>/memory.jsonl        authority on what THIS AGENT knows, owns, retrieved, paid and baked
  *   GET <market>/api/runtime               authority on what is ON THE MODEL right now
  *
  * The agent is explicitly not the node's operator (`agent.ts:675`), it may talk to several markets, and it must work
@@ -53,12 +53,12 @@ export const RUNTIME_CACHE_MS = 5_000;
 /**
  * The node's own question key, character for character.
  *
- * Copied here for the same reason `packages/mcp/src/rows.ts` copies it out of the node: `@ngram/node`'s entry point
+ * Copied here for the same reason `packages/mcp/src/rows.ts` copies it out of the node: `@ainize/node`'s entry point
  * pulls express, sqlite and the trainer into a process that has 200 ms to answer. `test/memory.test.ts` pins this
  * copy to `packages/mcp/src/rows.ts`, which is itself pinned to `packages/node/src/teach-dataset.ts` — so a fact
  * learned from a training set and a question typed by a person land on the SAME key, which is the only reason the
  * row index and the node's de-duplication agree. When G2's subpath export lands this file imports `promptKey` from
- * `@ngram/mcp/rows` and the pin test proves nothing moved.
+ * `@ainize/mcp/rows` and the pin test proves nothing moved.
  */
 const CONTROLS = new RegExp('[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u034f\\u061c\\u180e\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff\\ufff9-\\ufffb]', 'g');
 const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
@@ -222,7 +222,7 @@ const shapeOf = (ix: MemoryIndex, shape: string): ShapeCounters => {
  * `DONE` is the teach VIEW's word for a finished lesson and the node never writes it, so keying on it meant a
  * SUCCESSFUL lesson never incremented this shape's bake counter: measured 2026-09-07, a baked engram sat in memory
  * while the shape it came from reported `bakes 0`. This is the node's own list (`TEACH_TERMINAL` in
- * `@ngram/mcp`'s teach-view), written out here so `memory.ts` stays free of the MCP client, and pinned to it by a
+ * `@ainize/mcp`'s teach-view), written out here so `memory.ts` stays free of the MCP client, and pinned to it by a
  * test in `bake.test.ts`. `bake.ts`'s BAKE_DONE_STATUSES is the SUCCESS subset — a failed lesson finished, and it
  * is not a price.
  */

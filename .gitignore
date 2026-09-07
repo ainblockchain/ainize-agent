@@ -6,7 +6,7 @@ dist/
 !.env.example
 packages/node/data/
 packages/web/dist/
-.ngram/
+.ainize/
 *.tsbuildinfo
 
 # Bench transcripts live in the run's transcripts.tar.zst; score.mjs unpacks it here on first use.

@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { argumentsSha256, McpDataSourceError, promptKey, type McpCallResult } from '@ngram/mcp/client';
+import { argumentsSha256, McpDataSourceError, promptKey, type McpCallResult } from '@ainize/mcp/client';
 import { builtinPlansDir, loadPlans, parsePlan, type AgentPlan } from '../src/plans.js';
 import {
   capProvenance, datasetForShape, explainNoPlan, planForQuestion, priorCall, retrieve, shapeFiles,

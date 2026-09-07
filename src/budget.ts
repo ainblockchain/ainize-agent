@@ -9,12 +9,12 @@
  *
  *  1. **Check-and-hold.** `reserve()` returns `{ settle, release }` and the amount is held until one of them is
  *     called, so two decisions in flight cannot both squeeze past the same remainder. This is the
- *     `@ngram/mcp` session `Budget.reserve` pattern (money.ts), one day and four units wide.
+ *     `@ainize/mcp` session `Budget.reserve` pattern (money.ts), one day and four units wide.
  *  2. **Intent before the act.** The `intent` line is appended to `spend.jsonl` BEFORE the call it pays for, exactly
  *     as `pending-payments.jsonl` is written before the money moves (agent.ts `appendPending`). A crash between the
  *     two therefore leaves evidence on this machine, and the unfinished reservation is counted AS SPENT on the next
  *     run for the three units where nothing else could tell us — the act may have happened.
- *  3. **A cap comes from outside the loop.** Flags, `NGRAM_AGENT_*` env, or `budget` in `<home>/agent.json`, and
+ *  3. **A cap comes from outside the loop.** Flags, `AINIZE_AGENT_*` env, or `budget` in `<home>/agent.json`, and
  *     nowhere else. A plan file is data that somebody else may have written; a market answer and a 402 are the other
  *     side of a negotiation. None of them can raise a cap: `caps` is frozen and there is no setter. `max` on one
  *     reservation may only LOWER what that call is allowed.
@@ -27,7 +27,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { AmountError, formatAmount, normalizeAmount, parseAmount } from '@ngram/mcp/money';
+import { AmountError, formatAmount, normalizeAmount, parseAmount } from '@ainize/mcp/money';
 import { spentToday } from './agent.js';
 import { agentLocale, translator, type Locale, type T } from './i18n.js';
 import { BUDGET_STRINGS } from './strings/budget.js';
@@ -46,10 +46,10 @@ export const BUDGET_FLAG: Record<BudgetKind, string> = {
   gpu_s: '--gpu-seconds-per-day',
 };
 export const BUDGET_ENV: Record<BudgetKind, string> = {
-  money: 'NGRAM_AGENT_BUDGET_PER_DAY',
-  queries: 'NGRAM_AGENT_QUERIES_PER_DAY',
-  lessons: 'NGRAM_AGENT_LESSONS_PER_DAY',
-  gpu_s: 'NGRAM_AGENT_GPU_SECONDS_PER_DAY',
+  money: 'AINIZE_AGENT_BUDGET_PER_DAY',
+  queries: 'AINIZE_AGENT_QUERIES_PER_DAY',
+  lessons: 'AINIZE_AGENT_LESSONS_PER_DAY',
+  gpu_s: 'AINIZE_AGENT_GPU_SECONDS_PER_DAY',
 };
 /** The key under `budget` in `<home>/agent.json`. */
 export const BUDGET_FILE_KEY: Record<BudgetKind, string> = {
@@ -314,7 +314,7 @@ export class AgentBudget {
   }
 
   get locale(): Locale { return this.opts.locale ?? agentLocale(); }
-  /** The currency the money cap is denominated in when a call does not name one. Matches `@ngram/mcp`'s own default. */
+  /** The currency the money cap is denominated in when a call does not name one. Matches `@ainize/mcp`'s own default. */
   get currency(): string { return this.opts.currency ?? 'AIN'; }
   private get now(): number { return (this.opts.now ?? Date.now)(); }
 

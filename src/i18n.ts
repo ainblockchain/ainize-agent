@@ -10,9 +10,9 @@
 export type Locale = 'ko' | 'en';
 export type Dict = Record<string, { ko: string; en: string }>;
 
-/** `NGRAM_LOCALE` first (explicit), then the shell's own `LC_ALL`/`LANG`. English otherwise — Ainize is English-first. */
+/** `AINIZE_LOCALE` first (explicit), then the shell's own `LC_ALL`/`LANG`. English otherwise — Ainize is English-first. */
 export function agentLocale(env: NodeJS.ProcessEnv = process.env): Locale {
-  const v = (env.NGRAM_LOCALE ?? env.LC_ALL ?? env.LANG ?? '').toLowerCase();
+  const v = (env.AINIZE_LOCALE ?? env.LC_ALL ?? env.LANG ?? '').toLowerCase();
   return v.startsWith('ko') ? 'ko' : 'en';
 }
 

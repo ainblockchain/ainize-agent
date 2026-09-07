@@ -21,13 +21,13 @@
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 /**
- * TYPE-only at load time, on purpose, and measured: `@ngram/mcp/client` pulls the MCP SDK, and importing it took
+ * TYPE-only at load time, on purpose, and measured: `@ainize/mcp/client` pulls the MCP SDK, and importing it took
  * this module from 12 ms to 483 ms. `ask` imports `shouldBake` from here for EVERY question — including the branch
  * whose whole claim is "no query, no completion, no cost" — so half a second of SDK loading on a cache hit would
  * make the loop's cheapest path its slowest. The value import happens inside `runBake`, on the one branch that is
  * about to spend a lesson and a block of GPU time anyway.
  */
-import type { TeachLessonResult, TeachPolicy } from '@ngram/mcp/client';
+import type { TeachLessonResult, TeachPolicy } from '@ainize/mcp/client';
 import { BudgetRefusal, trainerWorstCaseSeconds, type AgentBudget } from './budget.js';
 import { agentLocale, translator, type Locale } from './i18n.js';
 import { loadIdentity } from './identity.js';
@@ -59,7 +59,7 @@ export const ETA_MIN_SAMPLES = 3;
  * The node statuses that mean a lesson RAN and produced a knowledge file — the only ones whose seconds are the
  * price of compiling something.
  *
- * These are the node's own terminal statuses whose `teachState()` is `done` (`@ngram/mcp`'s teach-view). Written out
+ * These are the node's own terminal statuses whose `teachState()` is `done` (`@ainize/mcp`'s teach-view). Written out
  * rather than imported because this module is on `ask`'s hot path and that import pulls the MCP SDK;
  * `test/bake.test.ts` pins the list against `teachState` so it cannot drift.
  *
@@ -106,7 +106,7 @@ const round = (x: number, p = 2): number => Math.round(x * 10 ** p) / 10 ** p;
 /**
  * What a bake of this shape has actually cost, read off the memory log rather than off the index.
  *
- * The index's `bake` counters do not carry the trainer backend, and a lesson run under `NGRAM_TEACH_BACKEND=stub`
+ * The index's `bake` counters do not carry the trainer backend, and a lesson run under `AINIZE_TEACH_BACKEND=stub`
  * copies a fixture npz: its `total_s` is a real measurement of a file copy and a meaningless price for training a
  * model. Using it as `bake_cost` would produce a confident N\* that measured nothing — the exact failure the node
  * guards against when it refuses to derive an ETA from stub samples.
@@ -391,7 +391,7 @@ export interface BakeRun {
   lesson_spent: boolean;
   gpu_seconds_held: string | null;
   gpu_seconds_settled: string | null;
-  /** True when the node ran `NGRAM_TEACH_BACKEND=stub`: a real lesson record over a knowledge file that trains nothing. */
+  /** True when the node ran `AINIZE_TEACH_BACKEND=stub`: a real lesson record over a knowledge file that trains nothing. */
   simulated: boolean;
   /** Whether the model was asked what it already knew, and why not when it was not. */
   preflight: 'ran' | 'skipped_no_model';
@@ -417,7 +417,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
   const now = o.now ?? Date.now;
   const short = o.shape.slice(0, 12);
   const identity = loadIdentity(o.home, o.privateKey);
-  const { Context, loadConfig, runTeachLesson } = await import('@ngram/mcp/client');
+  const { Context, loadConfig, runTeachLesson } = await import('@ainize/mcp/client');
   const { datasetForShape, provenanceForShape } = await import('./retrieve.js');
 
   const ds: ShapeDataset = datasetForShape(o.home, o.shape);
@@ -440,7 +440,7 @@ export async function runBake(o: RunBakeOptions): Promise<BakeRun> {
       AINIZE_TEACH_KEY: identity.privateKey,
       AINIZE_MCP_MAX_TEACH_JOBS: '1',
       AINIZE_MCP_STATE_DIR: o.home,
-      AINIZE_MCP_POLL_MS: process.env.NGRAM_AGENT_POLL_MS ?? '3000',
+      AINIZE_MCP_POLL_MS: process.env.AINIZE_AGENT_POLL_MS ?? '3000',
     } as NodeJS.ProcessEnv,
   });
   const ctx = new Context(cfg);

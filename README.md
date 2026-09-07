@@ -75,7 +75,7 @@ ainize-agent run --track daily/krx --max-price 5                                
 ainize-agent catalog       # what is on sale, LISTED and the older versions still sold beside them
 ainize-agent purchases     # what this agent bought, from whom, for how much, and where the file is
 ainize-agent watch --track daily/krx --budget-per-day 30 --once
-ainize-agent keys          # identity in <home>/identity.json (NGRAM_AGENT_HOME, or --home)
+ainize-agent keys          # identity in <home>/identity.json (AINIZE_AGENT_HOME, or --home)
 ainize-agent balance       # what it can spend here; the initial grant is read from the node's GET /api/info
 ```
 
@@ -108,11 +108,11 @@ All of it is text: `cat`, `grep` and `diff` work, and copying the directory move
 ## Reuse, not rebuild
 
 The loop owns none of the expensive parts. Buying is `runAgent` unchanged (`--no-probe`, keep). Retrieval is
-`McpDataSource` from `@ngram/mcp/client`. Teaching is `runTeachLesson` — the body of the MCP `teach` tool, not a copy
+`McpDataSource` from `@ainize/mcp/client`. Teaching is `runTeachLesson` — the body of the MCP `teach` tool, not a copy
 of it. Residency is the node's own `applied` stack, read through the public `GET /api/runtime` (the agent is not the
 node's operator). Prompt keys and dataset hashes are the node's own, so a fact learned from a training set and a
 question typed by a person land on the same key.
 
-Programmatic use: `import { ask, runAgent, shouldBake, AgentMemory, AgentBudget } from '@ngram/agent'` — importing
-it costs the `@ngram/core` crypto every command already needs and about 6 ms more, not the MCP SDK, which is loaded
+Programmatic use: `import { ask, runAgent, shouldBake, AgentMemory, AgentBudget } from '@ainize/agent'` — importing
+it costs the `@ainize/core` crypto every command already needs and about 6 ms more, not the MCP SDK, which is loaded
 only on the branch that calls somebody else's server.

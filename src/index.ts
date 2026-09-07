@@ -2,7 +2,7 @@
  * Library entry. `run`'s side of the product (buy, verify, apply) plus the loop `ask` drives.
  *
  * `ask.ts` reaches `retrieve.ts` and the MCP client through a dynamic import, so importing this module costs the
- * `@ngram/core` crypto it already needed (~340 ms, measured) and about 6 ms more — not the MCP SDK, which is loaded
+ * `@ainize/core` crypto it already needed (~340 ms, measured) and about 6 ms more — not the MCP SDK, which is loaded
  * only on the branch that actually calls somebody else's server.
  */
 export * from './agent.js';

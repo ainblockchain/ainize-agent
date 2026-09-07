@@ -88,7 +88,7 @@ test('the statuses that count as a finished lesson are the node\'s own, and they
   // The node's terminal success status is READY, never "DONE" — `DONE` is the teach VIEW's word for it. Keying on
   // the view's word meant `bake_cost` was never found, N* was never computable, and the economic gate could never
   // be satisfied however many lessons had run.
-  const { TEACH_TERMINAL, teachState } = await import('@ngram/mcp/client');
+  const { TEACH_TERMINAL, teachState } = await import('@ainize/mcp/client');
   const done = TEACH_TERMINAL.filter((s) => teachState(s) === 'done');
   assert.deepEqual([...BAKE_DONE_STATUSES].sort(), [...done].sort());
   assert.ok(BAKE_DONE_STATUSES.includes('READY' as never));

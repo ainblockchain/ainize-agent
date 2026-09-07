@@ -18,7 +18,7 @@ import {
   AinLedger, ainPaymentDigest, canonicalJson, decodeRequirements, encodePayload, sha256Hex, signMessage, transferKeyFor,
   X402_HEADER_PAYMENT, X402_HEADER_REQUIRED,
   type CatalogEntry, type Identity, type PatchManifest, type X402Payload, type X402Required, type X402Requirement,
-} from '@ngram/core';
+} from '@ainize/core';
 import { agentHome, authHeader, loadIdentity } from './identity.js';
 
 const execFileP = promisify(execFile);
@@ -597,7 +597,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   const unreachable: string[] = [];
   for (const cand of candidates) {
     step(`[3] requesting the resource → GET ${cand.url}  (${cand.source})`);
-    try { r1 = await getJson<{ requirements?: X402Requirement[] }>(cand.url, { headers: { 'x-ngram-buyer': identity.address } }); gateway = cand.url; break; }
+    try { r1 = await getJson<{ requirements?: X402Requirement[] }>(cand.url, { headers: { 'x-ainize-buyer': identity.address } }); gateway = cand.url; break; }
     catch (e) { unreachable.push(`${cand.url} (${(e as Error).message})`); step(`    no answer from ${cand.url}: ${(e as Error).message}`); }
   }
   if (!r1) throw new Error(`the seller of ${pick.anchor.id} could not be reached: ${unreachable.join('; ')}`);
@@ -639,7 +639,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
       step(`    paid tx ${payload.txHash} → ${req.payTo} for ${req.resource} (nonce ${req.nonce}); recorded in ${pendingFile(home)}`);
     }
     res.scheme = payload.scheme; res.amount = req.maxAmountRequired; res.tx_hash = payload.txHash;
-    const r2 = await getJson<unknown>(gateway, { headers: { [X402_HEADER_PAYMENT]: encodePayload(payload), 'x-ngram-buyer': identity.address } }, 120_000);
+    const r2 = await getJson<unknown>(gateway, { headers: { [X402_HEADER_PAYMENT]: encodePayload(payload), 'x-ainize-buyer': identity.address } }, 120_000);
     if (r2.status !== 200) {
       // Items 293 / 294 — the seller's refusal is a readable sentence on its side and arrived here as a status code
       // and a JSON blob, with no step of its own in the timeline: three "pay: …" lines and no "rejected" anywhere.
@@ -674,7 +674,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
     let lastErr: Error | null = null;
     for (const url of manifest.blob_urls) {
       try {
-        const r = await fetch(`${url}?token=${encodeURIComponent(manifest.download_token)}`, { headers: { 'x-ngram-auth': authHeader(identity, `blob:${manifest.patch_sha256}`) }, signal: AbortSignal.timeout(10 * 60_000) });
+        const r = await fetch(`${url}?token=${encodeURIComponent(manifest.download_token)}`, { headers: { 'x-ainize-auth': authHeader(identity, `blob:${manifest.patch_sha256}`) }, signal: AbortSignal.timeout(10 * 60_000) });
         if (!r.ok || !r.body) throw new Error(`${url} → ${r.status}`);
         await pipeline(Readable.fromWeb(r.body as never), createWriteStream(`${dest}.part`));
         renameSync(`${dest}.part`, dest);

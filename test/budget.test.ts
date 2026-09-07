@@ -54,7 +54,7 @@ function purchase(h: string, amount: string, asset: string, at: number) {
 test('a cap is read from a flag, then env, then agent.json — and from nowhere else', () => {
   const h = home();
   writeFileSync(join(h, 'agent.json'), JSON.stringify({ budget: { money_per_day: '9', queries_per_day: 40, lessons_per_day: 2, gpu_seconds_per_day: 900 } }));
-  const env = { NGRAM_AGENT_QUERIES_PER_DAY: '7', NGRAM_AGENT_LESSONS_PER_DAY: '1' };
+  const env = { AINIZE_AGENT_QUERIES_PER_DAY: '7', AINIZE_AGENT_LESSONS_PER_DAY: '1' };
 
   const caps = loadCaps({ home: h, flags: { money: 3 }, env, locale: 'en' });
   assert.equal(caps.money.amount, '3');
@@ -75,7 +75,7 @@ test('an unset cap is null, not a default this module invented', () => {
 test('a malformed cap refuses at load and names where it came from', () => {
   const h = home();
   assert.throws(() => loadCaps({ home: h, flags: { money: 'lots' as never }, env: {}, locale: 'en' }), /cap --budget-per-day \(money_per_day\) is "lots"/);
-  assert.throws(() => loadCaps({ home: h, env: { NGRAM_AGENT_LESSONS_PER_DAY: '0.5' }, locale: 'en' }), /cap NGRAM_AGENT_LESSONS_PER_DAY \(lessons_per_day\) is "0\.5"/);
+  assert.throws(() => loadCaps({ home: h, env: { AINIZE_AGENT_LESSONS_PER_DAY: '0.5' }, locale: 'en' }), /cap AINIZE_AGENT_LESSONS_PER_DAY \(lessons_per_day\) is "0\.5"/);
 });
 
 test('caps are frozen — nothing inside the loop can raise one', () => {
@@ -184,7 +184,7 @@ test('the "no cap" refusal names the flag, the env var, the file key and the fil
     assert.ok(e instanceof BudgetRefusal);
     assert.equal(e.code, 'no_cap');
     assert.match(e.message, /--lessons-per-day/);
-    assert.match(e.message, /NGRAM_AGENT_LESSONS_PER_DAY/);
+    assert.match(e.message, /AINIZE_AGENT_LESSONS_PER_DAY/);
     assert.match(e.message, /budget\.lessons_per_day/);
     assert.match(e.message, new RegExp(join(h, 'agent.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(e.message, /a 402 are all data/);

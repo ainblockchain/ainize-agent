@@ -123,8 +123,8 @@ export const LOOP_STRINGS: Dict = {
     ko: '학습 작업이 {state} 로 끝났습니다: {reason}. 그래도 오늘의 학습권 1개는 소모되었습니다 — 노드는 제출 시점에 차감하고 환불하지 않습니다. 자동으로 재시도하지 않습니다.',
   },
   'bake.stub': {
-    en: 'this node runs NGRAM_TEACH_BACKEND=stub: the lesson record, the dataset and the state machine are real, and the knowledge file is a fixture that trains no weights. Nothing here measures a model.',
-    ko: '이 노드는 NGRAM_TEACH_BACKEND=stub 으로 동작합니다: 학습 작업 기록과 데이터셋, 상태 전이는 실제이지만 결과 파일은 가중치를 학습하지 않은 고정 샘플입니다. 여기서 나온 값으로 모델을 평가할 수 없습니다.',
+    en: 'this node runs AINIZE_TEACH_BACKEND=stub: the lesson record, the dataset and the state machine are real, and the knowledge file is a fixture that trains no weights. Nothing here measures a model.',
+    ko: '이 노드는 AINIZE_TEACH_BACKEND=stub 으로 동작합니다: 학습 작업 기록과 데이터셋, 상태 전이는 실제이지만 결과 파일은 가중치를 학습하지 않은 고정 샘플입니다. 여기서 나온 값으로 모델을 평가할 수 없습니다.',
   },
   /**
    * The `--description` the publish command carries. It is a value that becomes a permanent public record, so it says

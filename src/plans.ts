@@ -3,7 +3,7 @@
  *
  * Two ideas, and they are deliberately separate:
  *
- *  1. **A plan is declarative JSON**, for the same reason a `RowMapping` is (`@ngram/mcp/rows.ts`): it can be
+ *  1. **A plan is declarative JSON**, for the same reason a `RowMapping` is (`@ainize/mcp/rows.ts`): it can be
  *     logged, reviewed by a person, stored in provenance and re-run. A plan says which MCP server to ask, which
  *     tool, with which arguments, how to turn the answer into `{prompt, answer}` rows — and which *declared*
  *     phrasings of a question it answers, in English and Korean, in the same list.
@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { argumentsSha256, stableJson, type RowMapping } from '@ngram/mcp/client';
+import { argumentsSha256, stableJson, type RowMapping } from '@ainize/mcp/client';
 
 /** Re-exported so the loop can hash a bound call without importing the MCP client itself (and its SDK) to do it. */
 export { argumentsSha256 };

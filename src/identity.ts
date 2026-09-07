@@ -1,11 +1,11 @@
-/** Agent identity — its own AIN keypair in ~/.ngram-agent/identity.json (NGRAM_AGENT_HOME overrides). */
+/** Agent identity — its own AIN keypair in ~/.ainize-agent/identity.json (AINIZE_AGENT_HOME overrides). */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createIdentity, identityFromPrivateKey, signMessage, type Identity } from '@ngram/core';
+import { createIdentity, identityFromPrivateKey, signMessage, type Identity } from '@ainize/core';
 
 export function agentHome(explicit?: string): string {
-  return explicit ?? process.env.NGRAM_AGENT_HOME ?? join(homedir(), '.ngram-agent');
+  return explicit ?? process.env.AINIZE_AGENT_HOME ?? join(homedir(), '.ainize-agent');
 }
 
 export function loadIdentity(home = agentHome(), privateKey?: string): Identity {
@@ -21,7 +21,7 @@ export function loadIdentity(home = agentHome(), privateKey?: string): Identity 
   return id;
 }
 
-/** Mirrors @ngram/node authHeader(): `<address>:<ts>:<sig over "purpose:ts">` */
+/** Mirrors @ainize/node authHeader(): `<address>:<ts>:<sig over "purpose:ts">` */
 export function authHeader(identity: Identity, purpose: string): string {
   const ts = Date.now();
   return `${identity.address}:${ts}:${signMessage(`${purpose}:${ts}`, identity.privateKey)}`;

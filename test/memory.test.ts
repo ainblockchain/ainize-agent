@@ -14,7 +14,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-// the MCP package's copy — which is the node's copy. Imported by path because `@ngram/mcp` exports no `./rows`
+// the MCP package's copy — which is the node's copy. Imported by path because `@ainize/mcp` exports no `./rows`
 // subpath yet (G2 adds `./client` and `./money`); when it does, `memory.ts` imports it and this test still holds.
 import { normalizeTeachRow, promptKey } from '../../mcp/src/rows.js';
 import {
@@ -346,7 +346,7 @@ test('fetchRuntime reads the public endpoint, fingerprints it, and caches it for
   };
   const server = createServer((req, res) => {
     hits += 1;
-    if (req.headers.authorization || req.headers['x-ngram-auth']) { res.writeHead(500); res.end('the agent is not the operator'); return; }
+    if (req.headers.authorization || req.headers['x-ainize-auth']) { res.writeHead(500); res.end('the agent is not the operator'); return; }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
   });

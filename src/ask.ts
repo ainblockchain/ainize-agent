@@ -10,7 +10,7 @@
  *                        and keep the engram in this agent's own memory.
  *
  * Everything expensive on the right-hand side already existed before this file: `runAgent` buys, verifies and
- * applies (`agent.ts`), `McpDataSource` retrieves (`@ngram/mcp/client`), `runTeachLesson` teaches. What `ask` adds
+ * applies (`agent.ts`), `McpDataSource` retrieves (`@ainize/mcp/client`), `runTeachLesson` teaches. What `ask` adds
  * is the left column — a memory to consult first, a counter that notices repetition, a budget with four units, and
  * the arrows between them.
  *
@@ -24,7 +24,7 @@
  *  3. **A refusal is final.** When a budget says no, the loop stops and says so with the arithmetic. It does not
  *     buy something cheaper, trim the lesson or try again.
  */
-import type { CatalogEntry } from '@ngram/core';
+import type { CatalogEntry } from '@ainize/core';
 import {
   askModelDetailed, fetchCatalog, pickPatch, purchasesFile, readPurchases, runAgent,
   type AgentOptions, type AgentResult,
@@ -43,7 +43,7 @@ import { LOOP_STRINGS } from './strings/loop.js';
 /**
  * `retrieve.ts` and `bake.ts` are reached through a DYNAMIC import, and that is not styling.
  *
- * Both pull `@ngram/mcp/client`, which pulls the MCP SDK. A question answered from memory must not pay for a
+ * Both pull `@ainize/mcp/client`, which pulls the MCP SDK. A question answered from memory must not pay for a
  * network client it never opens — that is the whole claim being made about compiled memory — so the modules that
  * speak to somebody else's server are loaded only on the branch that actually speaks to one. The types are
  * imported statically, so nothing here is untyped.
