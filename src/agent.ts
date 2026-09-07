@@ -226,6 +226,25 @@ export function resolveSupersedes(items: CatalogEntry[], start: CatalogEntry, lo
  * is chosen — the developer could not see the choice at all, and `agent catalog` (LISTED only) did not list the
  * cheaper item either.
  */
+/**
+ * Does `word` occur in `hay` as a WORD, rather than anywhere inside one?
+ *
+ * `hay.includes(word)` was the whole test, and it spends money: measured 2026-09-07 against a throwaway market,
+ * "send me the contract address of the lease we signed last April" bought `pixelplus-demo` for 0.5 CREDIT — because
+ * "me" is inside "pixelplus-de**mo**". A two-letter fragment of an id is not a reason to buy anything, and the
+ * agent had a receipt for a Korean ticker table in answer to a question about a lease.
+ *
+ * The boundary is any character that is not a letter or a digit in ANY script, so `krx` still matches
+ * "krx-all-2761" and `종목코드` still matches a Korean name — a `\b` would not, since JavaScript's `\w` is ASCII.
+ * Punctuation-only and empty words never match.
+ */
+export function matchesAsWord(hay: string, word: string): boolean {
+  if (!word) return false;
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try { return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'u').test(hay); }
+  catch { return hay.includes(word); }   // a word that will not compile: fall back rather than refuse to match at all
+}
+
 export function pickPatch(items: CatalogEntry[], question: string, explicit?: string, log?: (l: string) => void, follow: FollowOptions | boolean = {}): CatalogEntry | null {
   const opts: FollowOptions = typeof follow === 'boolean' ? { followLatest: follow } : follow;
   const announce = (e: CatalogEntry) => log?.(`    match: ${e.anchor.id} — ${e.anchor.price} ${e.anchor.currency} · ${e.anchor.rows.toLocaleString('en-US')} rows · ${e.status}${e.superseded_by.length ? ` · newer: ${e.superseded_by.join(', ')}` : ''}`);
@@ -241,7 +260,7 @@ export function pickPatch(items: CatalogEntry[], question: string, explicit?: st
     if (e.status !== 'LISTED' && e.status !== 'SUPERSEDED') continue;
     const hay = [e.anchor.id, e.anchor.name, e.anchor.description, e.anchor.benchmark.schema, e.anchor.topic_path].join(' ').toLowerCase();
     let score = 0;
-    for (const w of words) if (hay.includes(w)) score += w.length;
+    for (const w of words) if (matchesAsWord(hay, w)) score += w.length;
     if (score > bestScore || (score === bestScore && best && (e.downloads > best.downloads || (e.downloads === best.downloads && e.passed > best.passed)))) { best = e; bestScore = score; }
   }
   if (!(bestScore > 0 && best)) return null;
