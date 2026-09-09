@@ -10,11 +10,12 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/bin.ts",
-    "test": "node --test --import tsx test/*.test.ts"
+    "test": "node --test --import tsx test/*.test.ts",
+    "prepare": "npm run build"
   },
   "dependencies": {
-    "@ainize/core": "0.1.0",
-    "@ainize/mcp": "0.1.0",
+    "@ainize/core": "github:ainblockchain/ainize-core",
+    "@ainize/mcp": "github:ainblockchain/ainize-mcp",
     "chalk": "^5.6.2",
     "yargs": "^18.1.0"
   },
