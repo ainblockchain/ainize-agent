@@ -14,8 +14,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-// the MCP package's copy — which is the node's copy. Imported by path because `@ainize/mcp` exports no `./rows`
-// subpath yet (G2 adds `./client` and `./money`); when it does, `memory.ts` imports it and this test still holds.
+// the MCP package's copy — which is the node's copy — through its package entry, which exports both symbols.
 import { normalizeTeachRow, promptKey } from '@ainize/mcp';
 import {
   AgentMemory, ANSWER_TTL_MS, answerMatches, answerCacheKey, clearRuntimeCache, decideRecall, emptyIndex, fetchRuntime,
