@@ -5,7 +5,7 @@
  *
  * The load-bearing assertion is the first one: our question key must be the NODE's question key, or a fact learned
  * from a training set and the same question typed by a person land on two different rows and the memory silently
- * answers nothing. `packages/mcp/src/rows.ts` is itself pinned to `packages/node/src/teach-dataset.ts`
+ * answers nothing. `@ainize/mcp`'s row normaliser is itself pinned to the node's `teach-dataset.ts`
  * (`packages/mcp/test/rows.test.ts`), so pinning to it pins to the node.
  */
 import { test } from 'node:test';
@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // the MCP package's copy — which is the node's copy. Imported by path because `@ainize/mcp` exports no `./rows`
 // subpath yet (G2 adds `./client` and `./money`); when it does, `memory.ts` imports it and this test still holds.
-import { normalizeTeachRow, promptKey } from '../../mcp/src/rows.js';
+import { normalizeTeachRow, promptKey } from '@ainize/mcp';
 import {
   AgentMemory, ANSWER_TTL_MS, answerMatches, answerCacheKey, clearRuntimeCache, decideRecall, emptyIndex, fetchRuntime,
   fold, loadIndex, memoryFile, memoryIndexFile, memoryView, normalizeAnswer, recallMismatchLine, rowKey, runtimeLine,
