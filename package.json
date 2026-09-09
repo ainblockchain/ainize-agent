@@ -2,7 +2,19 @@
   "name": "@ainize/agent",
   "version": "0.1.0",
   "private": true,
+  "description": "ainize-agent \u2014 autonomous buyer agent for the Ainize knowledge marketplace (automatic x402 payment, live load); `ngram-agent` alias kept",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "bin": {
     "ainize-agent": "./dist/bin.js"
   },
@@ -24,14 +36,5 @@
     "@types/yargs": "^17.0.35",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3"
-  },
-  "description": "ainize-agent \u2014 autonomous buyer agent for the Ainize knowledge marketplace (automatic x402 payment, live load); `ngram-agent` alias kept",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
   }
 }
