@@ -414,6 +414,20 @@ export function checkRequirement(req: X402Requirement, pick: CatalogEntry, gatew
   const asked = Number(req.maxAmountRequired);
   const onRecord = Number(pick.anchor.price || 0);
   if (!Number.isFinite(asked)) throw new Error(`the seller's 402 asks for ${JSON.stringify(req.maxAmountRequired)}, which is not an amount — refusing to pay`);
+  /**
+   * The units have to match before the numbers mean anything (item 378).
+   *
+   * Every check below compares `asked` with the anchor's price, the `--max-price` cap and the seller's address —
+   * and none of them looked at what was being asked FOR. A knowledge listed at `25 CREDIT` answered with
+   * `{asset: "AIN", maxAmountRequired: "20"}` passed all three, because 20 < 25, and `payFor` moved twenty real
+   * AIN. `appendPurchase` then filed it under `pick.anchor.currency`, so `spentToday()` — the authority behind
+   * this agent's money cap — booked it as CREDIT and the AIN cap never saw it.
+   */
+  const wants = (req.asset ?? '').trim();
+  const listed = (pick.anchor.currency ?? '').trim();
+  if (wants && listed && wants.toLowerCase() !== listed.toLowerCase()) {
+    throw new Error(`the gateway at ${gateway} asks to be paid in ${wants} and ${pick.anchor.id} is listed in ${listed} — refusing: ${asked} ${wants} is not ${pick.anchor.price} ${listed}, whatever the two numbers look like side by side. Nothing was paid.`);
+  }
   if (asked > onRecord + 1e-9) {
     throw new Error(`the gateway at ${gateway} asks for ${asked} ${req.asset} and the on-ledger record of ${pick.anchor.id} says ${pick.anchor.price} ${pick.anchor.currency} — refusing to pay more than the record. Nothing was paid.`);
   }
@@ -569,6 +583,9 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   const owning = o.repay ? undefined : findPurchase(home, pick.anchor.id, pick.anchor.patch_sha256);
   const ownedPath = owning?.path && existsSync(owning.path) ? owning.path : join(dir, `${pick.anchor.patch_sha256}.npz`);
   let manifestText: string;
+  // The key the pending row was written under — the seller may answer with a different tx hash, and the row is
+  // this agent's own record of what it sent.
+  let pendingKey: string | null = null;
   let manifest: PatchManifest;
   let contentSha: string | null;
   let gateway = '';
@@ -651,7 +668,19 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
     manifest = JSON.parse(manifestText) as PatchManifest;
     contentSha = r2.headers.get('x-content-sha256');
     res.tx_hash = r2.headers.get('x-payment-tx-hash') ?? payload.txHash;
-    clearPending(home, payload.txHash);
+    pendingKey = payload.txHash;
+    /**
+     * The pending row is NOT cleared here (item 379).
+     *
+     * It used to go the moment the manifest arrived, while the purchase receipt is only written forty lines
+     * later — after the manifest hash check, the anchor-sha check, the download and `sha256File`. Anything in
+     * between throwing left no receipt AND no pending row, so the next `run`/`watch` found neither, took the 402
+     * branch and paid a second time for knowledge already bought. That is the exact failure `pending-payments.jsonl`
+     * exists to prevent, and it was defeated by clearing it too early.
+     *
+     * It is cleared where the receipt is written, so at every instant the payment is recorded in one place or the
+     * other and never in neither.
+     */
     step(`    settled: tx ${res.tx_hash}  ${r2.headers.get('x-payment-response') ?? ''}`.trimEnd());
   } else if (r1.status === 200) {
     manifestText = r1.text; manifest = JSON.parse(manifestText) as PatchManifest; contentSha = r1.headers.get('x-content-sha256'); res.scheme = 'free';
@@ -695,6 +724,8 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
       gateway, market, amount: res.amount ?? '0', asset: pick.anchor.currency, scheme: res.scheme ?? 'free',
       tx_hash: res.tx_hash, nonce: '', path: dest, at: Date.now(),
     });
+    // The receipt is on disk: the payment is accounted for and the pending row has nothing left to protect.
+    if (pendingKey) clearPending(home, pendingKey);
     step(`    receipt written to ${purchasesFile(home)} — the next run of this command pays nothing for ${pick.anchor.id}`);
   }
 
