@@ -51,7 +51,7 @@ before(async () => {
   saveConfig(cfg, home);
   node = await startNode(cfg, { home, quiet: true, serveWeb: false });
   await seedDemo(node.market, { real: false, synthetic: true });
-  await waitFor(() => node.market.catalog(true), (c) => c.find((e) => e.anchor.id === 'law-kr-2026')?.status === 'LISTED', 30000);
+  await waitFor(() => node.market.catalog(true), (c) => c.find((e) => e.anchor.id === 'law-kr-2026')?.status === 'VERIFIED', 30000);
 });
 after(async () => { await node?.stop(); rmSync(tmp, { recursive: true, force: true }); });
 
@@ -196,7 +196,7 @@ test('agent: a supersede mark does not retarget the money at 250x the price (ite
     status, superseded_by: supersededBy, downloads: 0, passed: 1, quorum: 1, quorum_ok: true, sellable: true, attestations: [],
   }) as never;
   const cheap = mk('pixelplus-087600', '0.1', 'SUPERSEDED', ['krx-all-2761']);
-  const dear = mk('krx-all-2761', '25', 'LISTED');
+  const dear = mk('krx-all-2761', '25', 'VERIFIED');
   const items = [cheap, dear];
   const said: string[] = [];
   // default: the budget is the price of the item that was asked for → no switch, and the refusal names both prices

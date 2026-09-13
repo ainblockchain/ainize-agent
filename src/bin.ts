@@ -127,15 +127,15 @@ async (a) => {
 });
 
 /**
- * Item 232 — `catalog` listed LISTED only, so the cheaper, superseded item the market still sells was invisible:
+ * Item 232 — `catalog` listed VERIFIED only, so the cheaper, superseded item the market still sells was invisible:
  * the developer could not see the choice the agent was making on their behalf between a 0.1 and a 25 knowledge.
  */
-cli.command('catalog', 'List the knowledge on sale (LISTED and the older versions still sold beside them)', (y) => y
-  .option('status', { type: 'string', default: 'LISTED,SUPERSEDED', describe: 'comma list of statuses to show' }), async (a) => {
+cli.command('catalog', 'List the knowledge on sale (VERIFIED and the older versions still sold beside them)', (y) => y
+  .option('status', { type: 'string', default: 'VERIFIED,SUPERSEDED', describe: 'comma list of statuses to show' }), async (a) => {
   const items = await fetchCatalog(a.market, a.status);
   if (a.json) { process.stdout.write(JSON.stringify(items, null, 2) + '\n'); return; }
   for (const e of items) {
-    const status = e.status === 'LISTED' ? chalk.green(e.status.padEnd(10)) : chalk.gray(e.status.padEnd(10));
+    const status = e.status === 'VERIFIED' ? chalk.green(e.status.padEnd(10)) : chalk.gray(e.status.padEnd(10));
     const newer = e.superseded_by.length ? chalk.gray(`  newer: ${e.superseded_by.join(', ')}`) : '';
     /**
      * Item 282 — an agent never opens a page, so this line was the only place it could learn that the 3-credit row

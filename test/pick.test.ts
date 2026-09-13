@@ -17,7 +17,7 @@ const entry = (o: { id: string; name: string; description?: string; schema?: str
     model: { id_M: 'M', row_dim: 160, checkpoint_hash: 'h' },
     benchmark: { schema: o.schema ?? 'krx-ticker', queries: 1 },
   },
-  status: 'LISTED', superseded_by: [], quorum_ok: true, passed: 1, quorum: 1, downloads: 0, attestations: [], sellable: true,
+  status: 'VERIFIED', superseded_by: [], quorum_ok: true, passed: 1, quorum: 1, downloads: 0, attestations: [], sellable: true,
 } as unknown as CatalogEntry);
 
 const CATALOG = [

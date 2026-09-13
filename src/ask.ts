@@ -3,7 +3,7 @@
  *
  *     a question arrives
  *       → can I answer it from the memory I already carry?     yes: answer. no query, no cost.
- *       → no: is there a LISTED knowledge that covers it?      yes: buy it, apply it, and KEEP it.
+ *       → no: is there a VERIFIED knowledge that covers it?      yes: buy it, apply it, and KEEP it.
  *       → no: ask upstream through the MCP client.             slow, and it costs a query EVERY time.
  *            → have I now looked this SHAPE up often enough?
  *                 → yes: AINIZE IT. Build a dataset out of what was retrieved, run it through teach,

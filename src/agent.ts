@@ -1,7 +1,7 @@
 /**
  * Ainize buyer agent — an AI agent that ainizes its own knowledge gap: (rebuild of the patent prototype's
  * agent_client.py on the node protocol)
- *   [1] detect missing knowledge on the serving model → [2] find a LISTED patch in the catalog (quorum required)
+ *   [1] detect missing knowledge on the serving model → [2] find a VERIFIED patch in the catalog (quorum required)
  *   → [3] GET the x402 gateway → 402 → [4] pay (local-credit signed intent or AIN transfer) and retry with X-PAYMENT
  *   → [5] verify manifest hash, download the body, verify sha256 against the on-ledger anchor
  *   → [6] apply to the runtime without restart, re-ask, restore (unless --keep).
@@ -49,7 +49,7 @@ export interface AgentOptions {
   prompt?: string;
   api?: string;
   patch?: string;
-  /** buy the newest LISTED knowledge of this track instead of naming an id (item 266) */
+  /** buy the newest VERIFIED knowledge of this track instead of naming an id (item 266) */
   track?: string;
   repo?: string;
   keep?: boolean;
@@ -170,7 +170,7 @@ export async function askModel(api: string, prompt: string, maxTokens = 8): Prom
   return (await askModelDetailed(api, prompt, maxTokens)).text;
 }
 
-export async function fetchCatalog(market: string, status = 'LISTED,SUPERSEDED'): Promise<CatalogEntry[]> {
+export async function fetchCatalog(market: string, status = 'VERIFIED,SUPERSEDED'): Promise<CatalogEntry[]> {
   const r = await getJson<{ items: CatalogEntry[] }>(`${market}/api/catalog?status=${encodeURIComponent(status)}&limit=200&sort=popular`);
   if (r.status !== 200) throw new Error(`catalog request failed: ${r.status} ${r.text.slice(0, 200)}`);
   return r.body?.items ?? [];
@@ -187,7 +187,7 @@ export interface FollowOptions {
 }
 
 /**
- * Follow supersede marks (patent fig. 16) to the newest LISTED patch — with the price on the line (items 232, 291).
+ * Follow supersede marks (patent fig. 16) to the newest VERIFIED patch — with the price on the line (items 232, 291).
  *
  * The switch used to be silent about money: `pixelplus-087600 is superseded by krx-all-2761 (newer patch on the
  * same benchmark) → switching` retargeted a 0.1 AIN purchase at a 25 AIN one, 250× the price, decided by a supersede
@@ -204,7 +204,7 @@ export function resolveSupersedes(items: CatalogEntry[], start: CatalogEntry, lo
   while (cur.status === 'SUPERSEDED' && cur.superseded_by.length && !seen.has(cur.anchor.id)) {
     seen.add(cur.anchor.id);
     const next = cur.superseded_by.map((id) => items.find((e) => e.anchor.id === id)).filter((e): e is CatalogEntry => !!e)
-      .sort((a, b) => (b.status === 'LISTED' ? 1 : 0) - (a.status === 'LISTED' ? 1 : 0) || b.anchor.created_at - a.anchor.created_at)[0];
+      .sort((a, b) => (b.status === 'VERIFIED' ? 1 : 0) - (a.status === 'VERIFIED' ? 1 : 0) || b.anchor.created_at - a.anchor.created_at)[0];
     if (!next) break;
     const price = Number(next.anchor.price || 0);
     const money = `${cur.anchor.price} → ${next.anchor.price} ${next.anchor.currency}`;
@@ -223,7 +223,7 @@ export function resolveSupersedes(items: CatalogEntry[], start: CatalogEntry, lo
  * Keyword match of the question against name/description/schema/id; ties broken by downloads then attestations.
  *
  * Item 232: when the match is superseded, BOTH candidates are printed with their price and size before one of them
- * is chosen — the developer could not see the choice at all, and `agent catalog` (LISTED only) did not list the
+ * is chosen — the developer could not see the choice at all, and `agent catalog` (VERIFIED only) did not list the
  * cheaper item either.
  */
 /**
@@ -257,7 +257,7 @@ export function pickPatch(items: CatalogEntry[], question: string, explicit?: st
   const words = question.toLowerCase().split(/[\s,.?!:;()/]+/).filter((w) => w.length >= 2);
   let best: CatalogEntry | null = null; let bestScore = 0;
   for (const e of items) {
-    if (e.status !== 'LISTED' && e.status !== 'SUPERSEDED') continue;
+    if (e.status !== 'VERIFIED' && e.status !== 'SUPERSEDED') continue;
     const hay = [e.anchor.id, e.anchor.name, e.anchor.description, e.anchor.benchmark.schema, e.anchor.topic_path].join(' ').toLowerCase();
     let score = 0;
     for (const w of words) if (matchesAsWord(hay, w)) score += w.length;
@@ -269,7 +269,7 @@ export function pickPatch(items: CatalogEntry[], question: string, explicit?: st
 }
 
 /**
- * The newest LISTED knowledge on a track (item 266): `--track daily/krx` instead of an id that goes stale overnight.
+ * The newest VERIFIED knowledge on a track (item 266): `--track daily/krx` instead of an id that goes stale overnight.
  * A member retired by another member of the same track is history, exactly as a subscribing node resolves it.
  */
 export async function newestOnTrack(market: string, track: string, items: CatalogEntry[]): Promise<CatalogEntry> {
@@ -279,7 +279,7 @@ export async function newestOnTrack(market: string, track: string, items: Catalo
   const members = new Set(b.patch_ids);
   const usable = (b.current?.length ? b.current : b.patch_ids)
     .map((id) => items.find((e) => e.anchor.id === id))
-    .filter((e): e is CatalogEntry => !!e && e.status === 'LISTED' && e.sellable !== false && !e.superseded_by.some((x) => members.has(x)))
+    .filter((e): e is CatalogEntry => !!e && e.status === 'VERIFIED' && e.sellable !== false && !e.superseded_by.some((x) => members.has(x)))
     .sort((x, y) => y.anchor.created_at - x.anchor.created_at);
   if (!usable.length) throw new Error(`track ${track} has ${b.patch_ids.length} item(s) and none of them is verified and on sale right now — nothing to buy`);
   return usable[0];
@@ -562,7 +562,7 @@ export async function runAgent(o: AgentOptions, log: Logger = (l) => process.std
   if (!pick) throw new Error(target ? `patch ${target} is not listed on ${market}` : `no listed patch matches "${question}"`);
   // SUPERSEDED knowledge is still verified and valid (a newer version exists on the same subject) — allowed when explicitly requested.
   if (pick.status === 'SUPERSEDED' && pick.superseded_by?.length) step(`    note: ${pick.anchor.id} has a newer version on the same subject → ${pick.superseded_by.join(', ')} (--follow-price any raises the budget to take it)`);
-  if (pick.status !== 'LISTED' && pick.status !== 'SUPERSEDED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not verified — refusing to buy`);
+  if (pick.status !== 'VERIFIED' && pick.status !== 'SUPERSEDED') throw new Error(`patch ${pick.anchor.id} is ${pick.status}, not verified — refusing to buy`);
   if (!pick.quorum_ok) throw new Error(`verification quorum not met for ${pick.anchor.id} (${pick.passed}/${pick.quorum}) — refusing to buy`);
   // `sellable` is false while a verifier's challenge is open: quorum alone is not permission to spend (item 153).
   if (pick.sellable === false) throw new Error(`${pick.anchor.id} is challenged by a verifier and not for sale until it is re-verified${pick.open_challenge ? `: "${pick.open_challenge.reason}"` : ''} — refusing to buy`);
