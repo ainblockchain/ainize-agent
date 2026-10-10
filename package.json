@@ -13,7 +13,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "plans"
   ],
   "bin": {
     "ainize-agent": "./dist/bin.js"
