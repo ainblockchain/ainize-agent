@@ -156,7 +156,7 @@ export async function askModelDetailed(api: string, prompt: string, maxTokens = 
   const missingRoute = (raw.status === 404 && (!raw.body?.error?.code || ['not_found', 'route_not_found'].includes(raw.body.error.code))) || raw.status === 405;
   const r = missingRoute ? await getJson<Completion>(`${api}/v1/chat/completions`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: 0 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: 0, chat_template_kwargs: { enable_thinking: false } }),
   }, 120_000) : raw;
   if (r.status !== 200) throw new Error(`completion failed: ${r.status}`);
   const u = r.body?.usage;

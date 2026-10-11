@@ -30,7 +30,7 @@ for (const [status, code] of [[200, ''], [404, 'not_found'], [404, 'model_not_fo
       assert.equal(answer.text, status === 200 ? 'raw answer' : 'chat answer');
       assert.equal(answer.usage.total_tokens, 5);
       assert.equal(calls.length, fallback ? 2 : 1);
-      if (fallback) assert.deepEqual(calls[1].body, { model: 'own-model', messages: [{ role: 'user', content: 'own question' }], max_tokens: 16, temperature: 0 });
+      if (fallback) assert.deepEqual(calls[1].body, { model: 'own-model', messages: [{ role: 'user', content: 'own question' }], max_tokens: 16, temperature: 0, chat_template_kwargs: { enable_thinking: false } });
     } finally {
       server.closeAllConnections();
       await new Promise<void>(resolve => server.close(() => resolve()));
