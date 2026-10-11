@@ -147,13 +147,21 @@ export async function askModelDetailed(api: string, prompt: string, maxTokens = 
   const models = await getJson<{ data?: { id: string }[] }>(`${api}/v1/models`, {}, 5000);
   const model = models.body?.data?.[0]?.id;
   if (!model) throw new Error(`no model at ${api}`);
-  const r = await getJson<{ choices?: { text: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }>(`${api}/v1/completions`, {
+  type Completion = { choices?: { text?: string; message?: { content?: string } }[]; error?: { code?: string }; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
+  const raw = await getJson<Completion>(`${api}/v1/completions`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, prompt, max_tokens: maxTokens, temperature: 0 }),
   }, 120_000);
+  // A chat-only node has no raw completion route. Only an absent route permits this second request:
+  // never replay a refused, rate-limited or failed generation, which may already have consumed resources.
+  const missingRoute = (raw.status === 404 && (!raw.body?.error?.code || ['not_found', 'route_not_found'].includes(raw.body.error.code))) || raw.status === 405;
+  const r = missingRoute ? await getJson<Completion>(`${api}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: 0 }),
+  }, 120_000) : raw;
   if (r.status !== 200) throw new Error(`completion failed: ${r.status}`);
   const u = r.body?.usage;
   return {
-    text: (r.body?.choices?.[0]?.text ?? '').trim(),
+    text: (missingRoute ? r.body?.choices?.[0]?.message?.content ?? '' : r.body?.choices?.[0]?.text ?? '').trim(),
     model,
     // Never invented: a server that does not report `usage` leaves nulls, and the token term of N* is then missing
     // rather than zero — which is what makes `memory --why` able to name what it is short of.
