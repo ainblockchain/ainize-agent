@@ -1,0 +1,21 @@
+# ainize build for a CLI/library with no server of its own.
+# Stage "check": install, build and run the test suite — a failing build or test fails the deploy.
+# Final stage: serve the README (rendered to HTML after the tests pass) as a static page on $PORT.
+# Node >= 22.5 for node:sqlite (@ainize/core); python3 + numpy because the tests write .npz fixtures via python3.
+# The three github: dependencies are cloned and built (their own prepare scripts) on install: ~8-11 min cold,
+# hence build.timeoutMinutes in ainize.json.
+FROM node:24-bookworm AS check
+RUN apt-get update && apt-get install -y --no-install-recommends python3-numpy && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN npm install --no-audit --no-fund
+RUN npm run build && npm test
+RUN npx --yes marked@12.0.2 -i README.md -o /tmp/body.html \
+ && mkdir -p /www \
+ && { printf "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>ainize-agent</title><style>body{max-width:860px;margin:2em auto;padding:0 16px;font:16px/1.6 system-ui,sans-serif}pre{overflow:auto;background:#f4f4f4;padding:1em}code{background:#f4f4f4}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}img{max-width:100%%}</style>"; cat /tmp/body.html; } > /www/index.html
+
+FROM busybox:1.36.1
+COPY --from=check /www /www
+ENV PORT=8080
+EXPOSE 8080
+CMD ["sh", "-c", "exec httpd -f -v -p 0.0.0.0:${PORT} -h /www"]
