@@ -1,6 +1,6 @@
 {
   "name": "@ainize/agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ainize-agent — autonomous buyer agent for the Ainize knowledge marketplace (automatic x402 payment, live load); `ngram-agent` alias kept",
   "type": "module",
   "main": "./dist/index.js",
