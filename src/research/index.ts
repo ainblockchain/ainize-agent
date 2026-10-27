@@ -96,11 +96,25 @@ export function runTool(root: string, name: string, args: any): string {
   } catch (e) { return `error: ${(e as Error).message}`; }
 }
 
+const RETRYABLE = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ECONNREFUSED', 'UND_ERR_CLOSED']);
+
+/** A connection dropped before any response — typically a pooled keep-alive socket the server closed while tools ran. */
+export function isDroppedConnection(e: unknown): boolean {
+  const cause = (e as { cause?: { code?: string } })?.cause;
+  return e instanceof TypeError && !!cause?.code && RETRYABLE.has(cause.code);
+}
+
 async function complete(m: ResearchModel, body: unknown): Promise<any> {
-  const res = await (m.fetchImpl ?? fetch)(m.baseUrl.replace(/\/+$/, '') + '/v1/chat/completions', {
-    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(m.timeoutMs ?? 300_000),
+  const init = {
+    method: 'POST', redirect: 'error' as const, signal: AbortSignal.timeout(m.timeoutMs ?? 300_000),
     headers: { authorization: `Bearer ${m.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
-  });
+  };
+  const url = m.baseUrl.replace(/\/+$/, '') + '/v1/chat/completions';
+  let res: Response;
+  for (let attempt = 1; ; attempt++) {
+    try { res = await (m.fetchImpl ?? fetch)(url, init); break; }
+    catch (e) { if (attempt >= 3 || !isDroppedConnection(e)) throw e; }
+  }
   if (res.status === 429 || res.status === 503) throw Object.assign(new Error('model busy'), { busy: true });
   if (!res.ok) throw new Error(`model request failed (${res.status})`);
   return res.json();
