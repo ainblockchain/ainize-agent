@@ -9,7 +9,10 @@
  * Policy shared by all agents (decideEngagement):
  *   - direct messages are always answered;
  *   - a message that mentions the agent (`<@agentId>`) is answered;
- *   - a reply in a thread the agent already took part in (it wrote the root or any reply) is answered;
+ *   - a reply in a thread the agent already took part in is a CANDIDATE (`confirm: true`): thanks, acks, banter,
+ *     or a message only for other agents are dropped at once (quickDismiss); the rest are judged by the agent's
+ *     own model with addressingPrompt → parseAddressing ("does this need an answer from me?"), so people
+ *     chatting in a thread the agent once answered are not interrupted;
  *   - anything else is left alone (reply with SILENT).
  * Teams allows 120 s for an answer; work that takes longer answers now and posts the result later with
  * TeamsPoster (the agent's own Teams MCP token).
@@ -61,7 +64,16 @@ export function parseTeamsOrigin(metadata: unknown): TeamsOrigin | null {
 }
 
 export type EngagementReason = 'not-from-teams' | 'direct-message' | 'mentioned' | 'thread-participant' | 'not-addressed';
-export interface Engagement { respond: boolean; reason: EngagementReason; thread?: { channelId: string; parentId: string } }
+export interface Engagement {
+  respond: boolean; reason: EngagementReason; thread?: { channelId: string; parentId: string };
+  /** A thread follow-up: answer only if quickDismiss lets it through and the agent's model says it is for the agent. */
+  confirm?: boolean;
+  /** No text: acknowledge with this reaction on the current message (thanks / "it works" in the agent's thread). */
+  react?: string;
+}
+
+/** The reaction an agent leaves on thanks or a confirmation that its work helped. */
+export const THANKS_REACTION = '❤️';
 
 /** The shared answer-or-stay-silent rule (see the module comment). */
 export function decideEngagement(origin: TeamsOrigin | null, text: string, self?: { id?: string }): Engagement {
@@ -71,7 +83,11 @@ export function decideEngagement(origin: TeamsOrigin | null, text: string, self?
   const thread = location.kind === 'thread' && location.parentId ? { channelId: location.id, parentId: location.parentId } : undefined;
   if (location.kind === 'dm') return { respond: true, reason: 'direct-message', ...(thread ? { thread } : {}) };
   if (me && text.includes(`<@${me}>`)) return { respond: true, reason: 'mentioned', ...(thread ? { thread } : {}) };
-  if (thread && me && (origin.conversation?.messages ?? []).some(m => m.sender.id === me)) return { respond: true, reason: 'thread-participant', thread };
+  if (thread && me && (origin.conversation?.messages ?? []).some(m => m.sender.id === me)) {
+    if (isThanks(text)) return { respond: false, reason: 'not-addressed', thread, react: THANKS_REACTION };
+    const dismissed = quickDismiss(text, origin);
+    return dismissed ? { respond: false, reason: 'not-addressed', thread } : { respond: true, reason: 'thread-participant', thread, confirm: true };
+  }
   // Teams only delivers a channel message that does not mention the agent in "Receive everything" mode,
   // or a reply in a thread the agent started — the latter shows up as participation in the history.
   return { respond: false, reason: 'not-addressed', ...(thread ? { thread } : {}) };
@@ -120,6 +136,12 @@ export class TeamsPoster {
     await this.rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: this.cfg.clientName ?? '@ainize/agent/teams', version: '0.1.0' } });
     await this.rpc('notifications/initialized', undefined, true);
   }
+  /** Reacts to a message (needs the agent token's `reactions:write` scope). Toggles in Teams, so call it once. */
+  async react(messageId: string, emoji: string = THANKS_REACTION): Promise<void> {
+    await this.ready();
+    const result = await this.rpc('tools/call', { name: 'add_reaction', arguments: { messageId, emoji } });
+    if (result?.isError) throw new Error('AIN Teams refused the reaction');
+  }
   /** Replies in a channel thread; returns the new message id when Teams reports it. */
   async replyInThread(thread: { channelId: string; parentId: string }, content: string): Promise<string | null> {
     await this.ready();
@@ -128,4 +150,50 @@ export class TeamsPoster {
     const text = result?.content?.find((b: any) => b?.type === 'text')?.text;
     try { const parsed = JSON.parse(text); return typeof parsed?.id === 'string' ? parsed.id : (parsed?.message?.id ?? null); } catch { return null; }
   }
+}
+
+const THANKS = /(감사|고마워|고맙|thank|thx|\bty\b|해결(?:됐|되었|했)|잘\s*(?:됩니다|되네요|돼요|되었|됐)|잘\s*해결|덕분|works now|fixed it|🙏|❤️|♥)/iu;
+const QUESTION = /[?？]|(?:나요|까요|가요|ㄴ가요|인가요|는지|할지|주세요|해줘|해 줘|부탁)/u;
+
+/** Thanks or "it is solved" with no new question or request in it — answered with a reaction, not text. */
+export function isThanks(text: string): boolean {
+  const body = text.replace(/<@[^>]+>/g, '').trim();
+  return body.length > 0 && body.length <= 200 && THANKS.test(body) && !QUESTION.test(body);
+}
+
+const ACK = /^(?:[\s.!~,]*(?:감사(?:합니다|해요|드려요|드립니다)?|고마워(?:요)?|고맙습니다|넵+|네+|넹|예|옙|ㅇㅋ|오케이|ok(?:ay)?|okk*|thx|thanks?(?: you)?|ty|굿|좋아요|좋습니다|좋네요|알겠(?:습니다|어요)|확인(?:했습니다|했어요)?|수고(?:하셨습니다|하세요)|ㅋ+|ㅎ+|lol|👍|🙏|🙇|👏|🎉|😊|😄|❤️|♥)[\s.!~,]*)+$/iu;
+
+/** Messages that never need an answer: thanks/acks/laughter only, or mentions of other agents only. */
+export function quickDismiss(text: string, origin: TeamsOrigin | null): boolean {
+  const body = text.replace(/<@[^>]+>/g, '').trim();
+  if (!body || ACK.test(body)) return true;
+  const me = origin?.recipient?.id;
+  const mentioned = [...text.matchAll(/<@([^>]+)>/g)].map(m => m[1]);
+  if (me && mentioned.length && !mentioned.includes(me)) {
+    const agents = new Set((origin?.conversation?.messages ?? []).filter(m => m.sender.isAgent).map(m => m.sender.id));
+    if (mentioned.every(id => agents.has(id))) return true; // asking another agent, not this one
+  }
+  return false;
+}
+
+/** A short classification prompt for the agent's own model; answer with parseAddressing. */
+export function addressingPrompt(origin: TeamsOrigin | null, text: string, opts: { agentName?: string; maxChars?: number } = {}): string {
+  const name = opts.agentName ?? origin?.recipient?.displayName ?? 'the agent';
+  return [
+    `You are ${name}, an assistant taking part in an AIN Teams thread. A new message arrived in a thread where you answered before.`,
+    'Decide whether this new message needs an answer from you.',
+    'Answer YES when it asks a question or makes a request about the work discussed in this thread (also when it @mentions a person rather than you, if you can answer it from the same work), or follows up on, corrects or disputes your earlier answer.',
+    'Answer NO for thanks, acknowledgements, banter, status updates that ask nothing, scheduling or personal talk between people, or a question clearly meant for one specific person\'s own decision or opinion.',
+    'Reply with exactly one line: YES or NO, a space, and a short reason.',
+    '',
+    '<thread>', renderThread(origin, { maxChars: opts.maxChars ?? 12_000, selfLabel: `${name} (you)` }), '</thread>',
+    '', '<new_message>', text, '</new_message>',
+  ].join('\n');
+}
+
+/** Reads the model's one-line verdict; anything unclear means stay silent. */
+export function parseAddressing(output: string): { answer: boolean; reason: string } {
+  const line = String(output ?? '').trim().split('\n').find(l => l.trim()) ?? '';
+  const m = /^\W*(YES|NO)\b[\s:.-]*(.*)$/i.exec(line.trim());
+  return m ? { answer: m[1].toUpperCase() === 'YES', reason: m[2].slice(0, 200) } : { answer: false, reason: 'unclear verdict' };
 }

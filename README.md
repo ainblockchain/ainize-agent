@@ -131,6 +131,15 @@ if (!e.respond) return SILENT;                              // empty reply = Tea
 await new TeamsPoster({ url: TEAMS_MCP_URL, token: AGENT_TEAMS_TOKEN }).replyInThread(e.thread!, answer);
 ```
 
-With the workspace receive mode "Receive everything" the agent gets every channel message; `decideEngagement` keeps
-it quiet unless the message is a DM, mentions it (`<@agentId>`), or follows up a thread it wrote in. `renderThread`
-turns the conversation Teams sends into prompt text (oldest first, names instead of ids).
+With the workspace receive mode "Receive everything" the agent gets every channel message. `decideEngagement`:
+
+| message | result |
+|---|---|
+| DM, or mentions the agent (`<@agentId>`) | `respond: true` |
+| follow-up in a thread the agent took part in | `respond: true, confirm: true` — ask your own model with `addressingPrompt(origin, text)` and answer only if `parseAddressing(output).answer` |
+| thanks / "it works" in that thread (`isThanks`) | `respond: false, react: '❤️'` — `TeamsPoster.react(messageId)` instead of a text reply |
+| acks, laughter, a mention of another agent only (`quickDismiss`) | `respond: false` |
+| anything else | `respond: false` (reply `SILENT`) |
+
+Reactions need the agent token scope `reactions:write` (Teams agent tokens default to `channels:read`, `messages:write`).
+`renderThread` turns the conversation Teams sends into prompt text (oldest first, names instead of ids).
