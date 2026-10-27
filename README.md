@@ -116,3 +116,21 @@ question typed by a person land on the same key.
 Programmatic use: `import { ask, runAgent, shouldBake, AgentMemory, AgentBudget } from '@ainize/agent'` — importing
 it costs the `@ainize/core` crypto every command already needs and about 6 ms more, not the MCP SDK, which is loaded
 only on the branch that calls somebody else's server.
+
+## `@ainize/agent/teams` — behaving the same way in AIN Teams
+
+Every agent that answers in AIN Teams shares one rule and one set of helpers:
+
+```ts
+import { parseTeamsOrigin, decideEngagement, renderThread, TeamsPoster, SILENT } from '@ainize/agent/teams';
+
+const origin = parseTeamsOrigin(message.metadata);        // where / who / to whom / the conversation (Teams A2A origin)
+const e = decideEngagement(origin, text);                   // DM, mention, or a thread the agent already took part in
+if (!e.respond) return SILENT;                              // empty reply = Teams stays silent
+// Teams waits 120 s; longer work answers now and posts the result later in the same thread:
+await new TeamsPoster({ url: TEAMS_MCP_URL, token: AGENT_TEAMS_TOKEN }).replyInThread(e.thread!, answer);
+```
+
+With the workspace receive mode "Receive everything" the agent gets every channel message; `decideEngagement` keeps
+it quiet unless the message is a DM, mentions it (`<@agentId>`), or follows up a thread it wrote in. `renderThread`
+turns the conversation Teams sends into prompt text (oldest first, names instead of ids).
