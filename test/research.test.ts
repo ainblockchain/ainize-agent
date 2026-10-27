@@ -48,3 +48,28 @@ test('429 is reported as busy', async t => {
   const fetchImpl = (async () => new Response('busy', { status: 429 })) as typeof fetch;
   await assert.rejects(research({ baseUrl: 'http://m', apiKey: 'k', model: 'm', fetchImpl }, { root, system: 's', question: 'q' }), (e: any) => e.busy === true);
 });
+
+const dropped = () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) });
+
+test('a dropped keep-alive connection is retried', async t => {
+  const root = tree(t);
+  let calls = 0;
+  const fetchImpl = (async () => {
+    if (++calls === 1) throw dropped();
+    return Response.json({ choices: [{ message: { role: 'assistant', content: 'done' } }] });
+  }) as typeof fetch;
+  const r = await research({ baseUrl: 'http://m', apiKey: 'k', model: 'm', fetchImpl }, { root, system: 's', question: 'q' });
+  assert.equal(r.answer, 'done'); assert.equal(calls, 2);
+});
+
+test('repeated drops and other errors are not retried forever', async t => {
+  const root = tree(t);
+  let calls = 0;
+  const always = (async () => { calls++; throw dropped(); }) as typeof fetch;
+  await assert.rejects(research({ baseUrl: 'http://m', apiKey: 'k', model: 'm', fetchImpl: always }, { root, system: 's', question: 'q' }), /fetch failed/);
+  assert.equal(calls, 3);
+  calls = 0;
+  const other = (async () => { calls++; throw new TypeError('bad url'); }) as typeof fetch;
+  await assert.rejects(research({ baseUrl: 'http://m', apiKey: 'k', model: 'm', fetchImpl: other }, { root, system: 's', question: 'q' }), /bad url/);
+  assert.equal(calls, 1);
+});
