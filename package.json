@@ -1,6 +1,6 @@
 {
   "name": "@ainize/agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ainize-agent — autonomous buyer agent for the Ainize knowledge marketplace (automatic x402 payment, live load); `ngram-agent` alias kept",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,8 +12,15 @@
     },
     "./teams": {
       "types": "./dist/teams/index.d.ts",
+      "require": "./dist/teams/index.cjs",
       "import": "./dist/teams/index.js",
       "default": "./dist/teams/index.js"
+    },
+    "./research": {
+      "types": "./dist/research/index.d.ts",
+      "require": "./dist/research/index.cjs",
+      "import": "./dist/research/index.js",
+      "default": "./dist/research/index.js"
     }
   },
   "files": [
@@ -23,7 +30,7 @@
     "ainize-agent": "./dist/bin.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/cjs.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/bin.ts",
     "test": "node --test --import tsx test/*.test.ts",
@@ -42,5 +49,15 @@
     "tsx": "^4.23.13",
     "typescript": "^5.9.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "typesVersions": {
+    "*": {
+      "teams": [
+        "dist/teams/index.d.ts"
+      ],
+      "research": [
+        "dist/research/index.d.ts"
+      ]
+    }
+  }
 }

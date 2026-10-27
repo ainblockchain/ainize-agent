@@ -143,3 +143,16 @@ With the workspace receive mode "Receive everything" the agent gets every channe
 
 Reactions need the agent token scope `reactions:write` (Teams agent tokens default to `channels:read`, `messages:write`).
 `renderThread` turns the conversation Teams sends into prompt text (oldest first, names instead of ids).
+
+## `@ainize/agent/research` — answer by reading a directory tree
+
+```ts
+import { research } from '@ainize/agent/research';
+const { answer } = await research(
+  { baseUrl: 'http://127.0.0.1:3400', apiKey, model: 'DeepSeek-V4.1-Flash-1017' },   // any OpenAI-compatible endpoint with tools
+  { root: '/srv/engineering', system: '…', question: '…', budgetMs: 8 * 60_000 },
+);
+```
+
+Read-only by construction: `list_dir`, `read_file`, `grep`, `glob` inside `root` (no `..`, absolute paths or symlinks
+out of it), no writes, no shell, no network. `teams` and `research` also ship CommonJS builds (`require`).
