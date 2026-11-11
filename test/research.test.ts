@@ -73,3 +73,75 @@ test('repeated drops and other errors are not retried forever', async t => {
   await assert.rejects(research({ baseUrl: 'http://m', apiKey: 'k', model: 'm', fetchImpl: other }, { root, system: 's', question: 'q' }), /bad url/);
   assert.equal(calls, 1);
 });
+
+// A model server that streams: `gapMs` between chunks, or silence when `silent`.
+async function streamingModel(t: any, o: { chunks: string[]; gapMs: number; silent?: boolean }) {
+  const { createServer } = await import('node:http');
+  const bodies: any[] = [];
+  const server = createServer((req, res) => {
+    let raw = ''; req.on('data', d => raw += d); req.on('end', async () => {
+      bodies.push(JSON.parse(raw));
+      if (o.silent) return; // accepts the request and never answers
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const c of o.chunks) { await new Promise(r => setTimeout(r, o.gapMs)); if (res.destroyed) return; res.write(`data: ${c}\n\n`); }
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  return { baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, bodies };
+}
+const delta = (d: unknown) => JSON.stringify({ choices: [{ index: 0, delta: d }] });
+
+test('a long answer that keeps streaming is not cut by the timeout', async t => {
+  const root = tree(t);
+  // 8 chunks 60 ms apart = ~480 ms in total, against a 200 ms timeout: only silence may time out.
+  const words = ['긴 ', '답변', '을 ', '끝', '까지 ', '받', '습니다', '.'];
+  const m = await streamingModel(t, { gapMs: 60, chunks: [delta({ role: 'assistant', content: null }), delta({ reasoning_content: 'thinking' }), ...words.map(w => delta({ content: w }))] });
+  const r = await research({ baseUrl: m.baseUrl, apiKey: 'k', model: 'm', timeoutMs: 200 }, { root, system: 's', question: 'q' });
+  assert.equal(r.answer, '긴 답변을 끝까지 받습니다.');
+  assert.equal(m.bodies[0].stream, true);
+});
+
+test('a model that goes silent still times out', async t => {
+  const root = tree(t);
+  const m = await streamingModel(t, { gapMs: 0, chunks: [], silent: true });
+  const started = Date.now();
+  await assert.rejects(research({ baseUrl: m.baseUrl, apiKey: 'k', model: 'm', timeoutMs: 150 }, { root, system: 's', question: 'q' }), /aborted due to timeout/);
+  assert.ok(Date.now() - started < 2000);
+  const stalls = await streamingModel(t, { gapMs: 400, chunks: [delta({ content: 'a' }), delta({ content: 'b' })] });
+  await assert.rejects(research({ baseUrl: stalls.baseUrl, apiKey: 'k', model: 'm', timeoutMs: 150 }, { root, system: 's', question: 'q' }), /aborted due to timeout/);
+});
+
+test('streamed tool calls are put back together', async t => {
+  const root = tree(t);
+  let n = 0;
+  const sse = (chunks: string[]) => new Response(chunks.map(c => `data: ${c}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
+  const bodies: any[] = [];
+  const fetchImpl = (async (_u: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    return ++n === 1
+      ? sse([delta({ role: 'assistant', content: null }), delta({ tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'grep', arguments: '{"patt' } }] }), delta({ tool_calls: [{ index: 0, function: { arguments: 'ern":"getSession"}' } }] })])
+      : sse([delta({ content: 'found' })]);
+  }) as typeof fetch;
+  const r = await research({ baseUrl: 'http://m', apiKey: 'k', model: 'm', fetchImpl }, { root, system: 's', question: 'q' });
+  assert.equal(r.answer, 'found'); assert.equal(r.toolCalls, 1);
+  assert.deepEqual(bodies[1].messages.at(-2).tool_calls, [{ id: 'c1', type: 'function', function: { name: 'grep', arguments: '{"pattern":"getSession"}' } }]);
+  assert.match(bodies[1].messages.at(-1).content, /src\/store\.ts:1:/);
+});
+
+test('the final turn keeps the same tool list so the server can reuse its prompt cache', async t => {
+  const root = tree(t);
+  const bodies: any[] = [];
+  const fetchImpl = (async (_u: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    const message = bodies.length === 1
+      ? { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'glob', arguments: '{"pattern":"**/*.ts"}' } }] }
+      : { role: 'assistant', content: 'final' };
+    return Response.json({ choices: [{ message }] });
+  }) as typeof fetch;
+  const r = await research({ baseUrl: 'http://m', apiKey: 'k', model: 'm', fetchImpl }, { root, system: 's', question: 'q', maxTurns: 2 });
+  assert.equal(r.answer, 'final'); assert.equal(r.stopped, 'turns');
+  assert.deepEqual(bodies[1].tools, bodies[0].tools);
+  assert.equal(bodies[0].tool_choice, 'auto'); assert.equal(bodies[1].tool_choice, 'none');
+});

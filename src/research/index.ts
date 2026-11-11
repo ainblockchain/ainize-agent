@@ -104,20 +104,64 @@ export function isDroppedConnection(e: unknown): boolean {
   return e instanceof TypeError && !!cause?.code && RETRYABLE.has(cause.code);
 }
 
-async function complete(m: ResearchModel, body: unknown): Promise<any> {
-  const init = {
-    method: 'POST', redirect: 'error' as const, signal: AbortSignal.timeout(m.timeoutMs ?? 300_000),
-    headers: { authorization: `Bearer ${m.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
-  };
+/**
+ * One model call. The reply is streamed and `timeoutMs` is the longest SILENCE allowed (before the first byte, and
+ * between chunks), not a deadline for the whole call: a slow model writing a long answer over a long conversation
+ * legitimately takes longer than any fixed total, while a dead one sends nothing.
+ */
+async function complete(m: ResearchModel, body: Record<string, unknown>): Promise<any> {
+  const idleMs = m.timeoutMs ?? 300_000;
   const url = m.baseUrl.replace(/\/+$/, '') + '/v1/chat/completions';
-  let res: Response;
-  for (let attempt = 1; ; attempt++) {
-    try { res = await (m.fetchImpl ?? fetch)(url, init); break; }
-    catch (e) { if (attempt >= 3 || !isDroppedConnection(e)) throw e; }
+  const payload = JSON.stringify({ ...body, stream: true });
+  let res: Response, ctl: AbortController, timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => ctl.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), idleMs); };
+  try {
+    for (let attempt = 1; ; attempt++) {
+      ctl = new AbortController(); arm();
+      try {
+        res = await (m.fetchImpl ?? fetch)(url, {
+          method: 'POST', redirect: 'error', signal: ctl.signal,
+          headers: { authorization: `Bearer ${m.apiKey}`, 'content-type': 'application/json' }, body: payload,
+        });
+        break;
+      } catch (e) { if (attempt >= 3 || !isDroppedConnection(e)) throw e; }
+    }
+    if (res.status === 429 || res.status === 503) throw Object.assign(new Error('model busy'), { busy: true });
+    if (!res.ok) throw new Error(`model request failed (${res.status})`);
+    // A server that ignores `stream` answers with one JSON document.
+    if (!res.body || !/text\/event-stream/i.test(res.headers.get('content-type') ?? '')) return await res.json();
+    return await readStream(res.body, arm);
+  } finally { clearTimeout(timer); }
+}
+
+/** Folds OpenAI-style streamed chunks back into the non-streamed `{ choices: [{ message }] }` shape. */
+async function readStream(body: ReadableStream<Uint8Array>, onChunk: () => void): Promise<any> {
+  const decoder = new TextDecoder(), calls: any[] = [];
+  let buffer = '', content = '', seen = false;
+  const line = (raw: string) => {
+    if (!raw.startsWith('data:')) return;
+    const data = raw.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    let delta: any; try { delta = JSON.parse(data)?.choices?.[0]?.delta; } catch { return; }
+    if (!delta) return;
+    seen = true;
+    if (typeof delta.content === 'string') content += delta.content;
+    for (const c of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+      const call = (calls[c.index ?? 0] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+      if (c.id) call.id = c.id;
+      if (c.function?.name) call.function.name = c.function.name;
+      if (typeof c.function?.arguments === 'string') call.function.arguments += c.function.arguments;
+    }
+  };
+  for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+    onChunk();
+    buffer += decoder.decode(chunk, { stream: true });
+    for (let i; (i = buffer.indexOf('\n')) >= 0; buffer = buffer.slice(i + 1)) line(buffer.slice(0, i).trimEnd());
   }
-  if (res.status === 429 || res.status === 503) throw Object.assign(new Error('model busy'), { busy: true });
-  if (!res.ok) throw new Error(`model request failed (${res.status})`);
-  return res.json();
+  line(buffer.trimEnd());
+  if (!seen) return { choices: [] };
+  const tool_calls = calls.filter(Boolean);
+  return { choices: [{ message: { role: 'assistant', content, ...(tool_calls.length ? { tool_calls } : {}) } }] };
 }
 
 /** Runs the read-only tool loop and returns the model's final answer. */
@@ -127,8 +171,10 @@ export async function research(model: ResearchModel, o: ResearchOptions): Promis
   let toolCalls = 0;
   for (let turn = 1; turn <= maxTurns; turn++) {
     const last = turn === maxTurns || Date.now() - started > budget;
+    // The final turn keeps the tool list (tool_choice none): the tools are part of the prompt prefix, so dropping them
+    // makes the server re-read the whole conversation instead of reusing its cache.
     if (last) messages.push({ role: 'user', content: 'Stop investigating now and write the final answer from what you found.' });
-    const r = await complete(model, { model: model.model, messages, ...(last ? {} : { tools: RESEARCH_TOOLS, tool_choice: 'auto' }), max_tokens: 4000 });
+    const r = await complete(model, { model: model.model, messages, tools: RESEARCH_TOOLS, tool_choice: last ? 'none' : 'auto', max_tokens: 4000 });
     const msg = r?.choices?.[0]?.message;
     if (!msg) throw new Error('model returned no message');
     const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
