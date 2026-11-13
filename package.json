@@ -43,7 +43,7 @@
     "yargs": "^18.1.0"
   },
   "devDependencies": {
-    "@ainize/node": "github:ainblockchain/ainize-node",
+    "@ainize/node": "^0.4.2",
     "@types/node": "^24.10.0",
     "@types/yargs": "^17.0.35",
     "tsx": "^4.23.13",
