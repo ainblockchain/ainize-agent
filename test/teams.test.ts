@@ -57,7 +57,7 @@ test('thanks in the agent thread gets a heart, a question or plain chat in it do
   assert.equal(thanks('배포 해 주세요'), false);
   assert.equal(dismiss('넵', o), true);
   assert.match(prompt(o, 'getSession 은 날짜와 상관없나요?'), /AINA \(you\): 배포 완료했습니다[\s\S]*<new_message>/);
-  assert.deepEqual(parse('YES asks about the deployed admin'), { answer: true, reason: 'asks about the deployed admin' });
+  assert.deepEqual(parse('YES asks about the deployed admin'), { answer: true, stop: false, reason: 'asks about the deployed admin' });
   assert.equal(parse('maybe').answer, false);
 });
 
@@ -95,10 +95,14 @@ test('told to be quiet, the agent reacts and says nothing more in that thread un
   // A second "be quiet" by mention is still an order, and another agent's words neither silence nor call back.
   assert.equal(decide(at(called), `<@${AINA}> 조용히 해`).reason, 'quiet-requested');
   assert.equal(silencedIn(at([...after, { sender: 'a-other', agent: true, text: `<@${AINA}> 집계 부탁` }])!.conversation!.messages, AINA), true);
-  // Unaddressed in the agent's thread it is about the agent; said to a person by name, or in a thread the agent is not in, it is not.
-  assert.equal(decide(at(before), '조용히 해').reason, 'quiet-requested');
+  // An order that names nobody may be for the agent or between people: no pattern decides that, the model reads the thread.
+  assert.deepEqual(decide(at(before), '조용히 해'), { respond: true, reason: 'thread-participant', thread, confirm: true });
+  assert.equal(silencedIn(at([...before, { sender: CH, text: '조용히 해' }])!.conversation!.messages, AINA), false, 'people hushing each other do not silence the agent');
   assert.equal(decide(at(before), `<@${CH}> 조용히 해 ㅋㅋ`).reason !== 'quiet-requested', true);
   assert.equal(decide(at([{ sender: 'u-1', text: '회의 중' }]), '조용히 해').reason, 'not-addressed');
+  // Wordings no list knows reach the model too: a follow-up as a candidate, a mention with confirmStop.
+  assert.equal(decide(at(before), '쉿').confirm, true);
+  assert.deepEqual(decide(at(before), `<@${AINA}> 넌 이제 빠져`), { respond: true, reason: 'mentioned', confirmStop: true, thread });
   assert.equal(decide(parseTeamsOrigin({ location: { kind: 'channel', id: 'c' }, recipient: { id: AINA } }), `<@${AINA}> 그만 답해`).reason, 'quiet-requested');
   for (const yes of ['조용히 해', '조용', '너 좀 조용히 있어', '그만 답해', '이제 그만해', '답변 그만', '대답하지 마', '집계 그만 올려', '끼어들지 마', '가만히 있어', '시끄러워', 'shut up', 'be quiet', 'stop replying', "don't answer", 'AINA 멈춰'])
     assert.equal(quiet(yes), true, yes);
@@ -106,6 +110,13 @@ test('told to be quiet, the agent reacts and says nothing more in that thread un
     `어제 회의에서 누가 조용히 해 달라고 했는데 그 뒤로도 알림이 계속 울려서 확인해 보니 채널 설정이 전체 수신으로 되어 있었습니다. ${'설정 화면에서 바꾸는 방법을 정리해 주세요. '.repeat(3)}`])
     assert.equal(quiet(no), false, no);
   assert.match(prompt(at(before), 'ain calendar', { agentName: 'AINA' }), /entry in a poll or sign-up/);
+  const { parseAddressing: parse, stopPrompt, parseStop } = await import('../src/teams/index.ts');
+  assert.match(prompt(at(before), '쉿', { agentName: 'AINA' }), /Answer STOP when the message tells YOU[\s\S]*never STOP[\s\S]*YES, NO or STOP/);
+  assert.deepEqual(parse('STOP told to leave'), { answer: false, stop: true, reason: 'told to leave' });
+  assert.deepEqual(parse('YES asks for the count'), { answer: true, stop: false, reason: 'asks for the count' });
+  assert.deepEqual(parse('음…'), { answer: false, stop: false, reason: 'unclear verdict' });
+  assert.match(stopPrompt(at(before), `<@${AINA}> 넌 이제 빠져`, { agentName: 'AINA' }), /are you being told to stop\?[\s\S]*STOP or GO[\s\S]*넌 이제 빠져/);
+  assert.deepEqual([parseStop('STOP: asked to leave').stop, parseStop('GO a request').stop, parseStop('??').stop], [true, false, false]);
 });
 test('threadMessages() reads the thread as it is now, oldest first, marking agents', async () => {
   const calls: any[] = [];
