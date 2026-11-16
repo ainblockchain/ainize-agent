@@ -14,10 +14,14 @@
  *     own model with addressingPrompt → parseAddressing ("does this need an answer from me?"), so people
  *     chatting in a thread the agent once answered are not interrupted;
  *   - anything else is left alone (reply with SILENT);
- *   - "be quiet" is obeyed: a person telling the agent to stop (isQuietRequest — "조용히 해", "그만 답해", "stop
- *     replying") gets a reaction and no text, and from then on the agent says nothing in that thread — not to
- *     follow-ups, not with an answer it was still preparing (silencedIn before posting) — until a person
- *     mentions it again with something other than another "be quiet".
+ *   - "be quiet" is obeyed, in any words. Said to the agent by name in the plain words isQuietRequest knows
+ *     ("조용히 해", "그만 답해", "stop replying") it needs no model: a reaction, no text ('quiet-requested'), and
+ *     nothing more in that thread ('silenced', silencedIn) until a person mentions the agent again. Everything
+ *     else that could be such an order — other wordings ("쉿", "넌 빠져", "we'll take it from here"), an order
+ *     that names nobody, a mention — goes to the agent's model, which answers STOP when the agent is being told
+ *     to stop and never when people say it to each other (addressingPrompt / stopPrompt; `confirmStop` on a
+ *     mention). The agent keeps the threads it was told to leave (the library holds no state) and asks again
+ *     with stopPrompt before posting an answer that took minutes to prepare.
  * Teams allows 120 s for an answer; work that takes longer answers now and posts the result later with
  * TeamsPoster (the agent's own Teams MCP token).
  */
@@ -74,6 +78,8 @@ export interface Engagement {
   confirm?: boolean;
   /** No text: acknowledge with this reaction on the current message (thanks / "it works" in the agent's thread). */
   react?: string;
+  /** A mention outside a direct message: before answering, ask the model with stopPrompt whether it is an order to stop. */
+  confirmStop?: boolean;
 }
 
 /** The reaction an agent leaves on thanks or a confirmation that its work helped. */
@@ -91,12 +97,12 @@ export function isQuietRequest(text: string): boolean {
   const body = text.replace(/<@[^>]+>/g, '').trim();
   return body.length > 0 && body.length <= 120 && QUIET.test(body);
 }
-/** Meant for this agent: it is mentioned, or nobody is (in the agent's thread an unaddressed "조용히 해" is about the agent). */
-const quietForMe = (text: string, me: string) => isQuietRequest(text) && (text.includes(`<@${me}>`) || !/<@[^>]+>/.test(text));
+/** Plainly meant for this agent: it is mentioned. Whom an order that names nobody is for is the model's call, not a pattern's. */
+const quietForMe = (text: string, me: string) => isQuietRequest(text) && text.includes(`<@${me}>`);
 /**
- * Whether the agent has been told to be quiet in this conversation and not been called back since. Reads the messages
- * oldest first: a person's "be quiet" silences; a person's later mention of the agent (that is not another "be quiet")
- * lifts it. Use it on the origin's history when a message arrives, and on the thread as it is NOW before posting an
+ * Whether the agent has been told by name to be quiet in this conversation and not been called back since. Reads the
+ * messages oldest first: a person's "be quiet" to the agent silences; a person's later mention of the agent (that is
+ * not another "be quiet") lifts it. Orders in other words are found by the model (stopPrompt) and kept by the agent. Use it on the origin's history when a message arrives, and on the thread as it is NOW before posting an
  * answer that took minutes to prepare.
  */
 export function silencedIn(messages: Pick<TeamsHistoryMessage, 'sender' | 'text'>[], me: string): boolean {
@@ -118,12 +124,13 @@ export function decideEngagement(origin: TeamsOrigin | null, text: string, self?
   if (location.kind === 'dm') return { respond: true, reason: 'direct-message', ...(thread ? { thread } : {}) };
   const history = origin.conversation?.messages ?? [];
   const took = !!me && history.some(m => m.sender.id === me);
-  // "Be quiet", to the agent by name or unaddressed in a thread it takes part in: seen, no text, and silent from here on.
-  if (me && isQuietRequest(text) && (text.includes(`<@${me}>`) || (took && !/<@[^>]+>/.test(text))))
-    return { respond: false, reason: 'quiet-requested', react: QUIET_REACTION, ...(thread ? { thread } : {}) };
-  if (me && text.includes(`<@${me}>`)) return { respond: true, reason: 'mentioned', ...(thread ? { thread } : {}) };
+  // "Be quiet" to the agent by name, in plain words: seen, no text, and silent from here on.
+  if (me && quietForMe(text, me)) return { respond: false, reason: 'quiet-requested', react: QUIET_REACTION, ...(thread ? { thread } : {}) };
+  if (me && text.includes(`<@${me}>`)) return { respond: true, reason: 'mentioned', confirmStop: true, ...(thread ? { thread } : {}) };
   if (thread && me && took) {
     if (silencedIn(history, me)) return { respond: false, reason: 'silenced', thread };
+    // An order that names nobody ("조용히 해", "그만") may be for the agent or between people: the model reads the thread.
+    if (isQuietRequest(text)) return { respond: true, reason: 'thread-participant', thread, confirm: true };
     if (isThanks(text)) return { respond: false, reason: 'not-addressed', thread, react: THANKS_REACTION };
     const dismissed = quickDismiss(text, origin);
     return dismissed ? { respond: false, reason: 'not-addressed', thread } : { respond: true, reason: 'thread-participant', thread, confirm: true };
@@ -227,6 +234,8 @@ export function quickDismiss(text: string, origin: TeamsOrigin | null): boolean 
   return false;
 }
 
+const STOP_RULE = 'Answer STOP when the message tells YOU to be quiet, stop replying, leave, or stay out of this conversation — in any wording, polite, indirect, joking or annoyed ("쉿", "넌 빠져", "안 불렀어", "됐어 그만", "우리끼리 얘기할게요", "we\'ll take it from here") — or when people make clear they do not want your replies here. An order that names nobody is for you when it follows your own messages and nobody else is being noisy; it is NOT for you (never STOP) when people are plainly saying it to each other, quoting someone, or talking about something else being quiet or stopping.';
+
 /** A short classification prompt for the agent's own model; answer with parseAddressing. */
 export function addressingPrompt(origin: TeamsOrigin | null, text: string, opts: { agentName?: string; maxChars?: number } = {}): string {
   const name = opts.agentName ?? origin?.recipient?.displayName ?? 'the agent';
@@ -236,16 +245,41 @@ export function addressingPrompt(origin: TeamsOrigin | null, text: string, opts:
     'Answer YES when it asks a question or makes a request about the work discussed in this thread (also when it @mentions a person rather than you, if you can answer it from the same work), or follows up on, corrects or disputes your earlier answer.',
     'Answer NO for thanks, acknowledgements, banter, status updates that ask nothing, scheduling or personal talk between people, or a question clearly meant for one specific person\'s own decision or opinion.',
     'Answer NO when the message is another person\'s own contribution to the thread (their entry in a poll or sign-up, their opinion, their report to the group) or a remark people make to each other — also when it is about you. Having been asked once for a summary or a count is not a request to post an update each time someone adds something.',
-    'Reply with exactly one line: YES or NO, a space, and a short reason.',
+    STOP_RULE,
+    'Reply with exactly one line: YES, NO or STOP, a space, and a short reason.',
     '',
     '<thread>', renderThread(origin, { maxChars: opts.maxChars ?? 12_000, selfLabel: `${name} (you)` }), '</thread>',
     '', '<new_message>', text, '</new_message>',
   ].join('\n');
 }
 
-/** Reads the model's one-line verdict; anything unclear means stay silent. */
-export function parseAddressing(output: string): { answer: boolean; reason: string } {
+/** Reads the model's one-line verdict; anything unclear means stay silent. `stop`: the agent was told to leave the thread. */
+export function parseAddressing(output: string): { answer: boolean; stop: boolean; reason: string } {
   const line = String(output ?? '').trim().split('\n').find(l => l.trim()) ?? '';
-  const m = /^\W*(YES|NO)\b[\s:.-]*(.*)$/i.exec(line.trim());
-  return m ? { answer: m[1].toUpperCase() === 'YES', reason: m[2].slice(0, 200) } : { answer: false, reason: 'unclear verdict' };
+  const m = /^\W*(YES|NO|STOP)\b[\s:.-]*(.*)$/i.exec(line.trim());
+  return m ? { answer: m[1].toUpperCase() === 'YES', stop: m[1].toUpperCase() === 'STOP', reason: m[2].slice(0, 200) } : { answer: false, stop: false, reason: 'unclear verdict' };
+}
+
+/**
+ * Only the question "is the agent being told to stop?" — for a message that mentions the agent (which is otherwise
+ * answered without a model check), and for what people wrote in a thread while an answer was being prepared (pass
+ * those messages, joined, as `text`). Answer with parseStop.
+ */
+export function stopPrompt(origin: TeamsOrigin | null, text: string, opts: { agentName?: string; maxChars?: number } = {}): string {
+  const name = opts.agentName ?? origin?.recipient?.displayName ?? 'the agent';
+  return [
+    `You are ${name}, an assistant in an AIN Teams conversation. Read what was just written and decide one thing only: are you being told to stop?`,
+    STOP_RULE,
+    'Answer GO for everything else — a question or a request to you, also a curt or critical one.',
+    'Reply with exactly one line: STOP or GO, a space, and a short reason.',
+    '',
+    '<thread>', renderThread(origin, { maxChars: opts.maxChars ?? 12_000, selfLabel: `${name} (you)` }), '</thread>',
+    '', '<new_message>', text, '</new_message>',
+  ].join('\n');
+}
+/** Reads the model's STOP/GO line. An unreadable line is not an order to stop. */
+export function parseStop(output: string): { stop: boolean; reason: string } {
+  const line = String(output ?? '').trim().split('\n').find(l => l.trim()) ?? '';
+  const m = /^\W*(STOP|GO)\b[\s:.-]*(.*)$/i.exec(line.trim());
+  return m ? { stop: m[1].toUpperCase() === 'STOP', reason: m[2].slice(0, 200) } : { stop: false, reason: 'unclear verdict' };
 }
