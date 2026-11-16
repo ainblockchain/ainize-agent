@@ -13,7 +13,11 @@
  *     or a message only for other agents are dropped at once (quickDismiss); the rest are judged by the agent's
  *     own model with addressingPrompt → parseAddressing ("does this need an answer from me?"), so people
  *     chatting in a thread the agent once answered are not interrupted;
- *   - anything else is left alone (reply with SILENT).
+ *   - anything else is left alone (reply with SILENT);
+ *   - "be quiet" is obeyed: a person telling the agent to stop (isQuietRequest — "조용히 해", "그만 답해", "stop
+ *     replying") gets a reaction and no text, and from then on the agent says nothing in that thread — not to
+ *     follow-ups, not with an answer it was still preparing (silencedIn before posting) — until a person
+ *     mentions it again with something other than another "be quiet".
  * Teams allows 120 s for an answer; work that takes longer answers now and posts the result later with
  * TeamsPoster (the agent's own Teams MCP token).
  */
@@ -63,7 +67,7 @@ export function parseTeamsOrigin(metadata: unknown): TeamsOrigin | null {
   return Object.keys(out).length ? out : null;
 }
 
-export type EngagementReason = 'not-from-teams' | 'direct-message' | 'mentioned' | 'thread-participant' | 'not-addressed';
+export type EngagementReason = 'not-from-teams' | 'direct-message' | 'mentioned' | 'thread-participant' | 'not-addressed' | 'quiet-requested' | 'silenced';
 export interface Engagement {
   respond: boolean; reason: EngagementReason; thread?: { channelId: string; parentId: string };
   /** A thread follow-up: answer only if quickDismiss lets it through and the agent's model says it is for the agent. */
@@ -74,6 +78,36 @@ export interface Engagement {
 
 /** The reaction an agent leaves on thanks or a confirmation that its work helped. */
 export const THANKS_REACTION = '❤️';
+/** The only answer to "be quiet": seen, and nothing more. */
+export const QUIET_REACTION = '🤐';
+
+const QUIET = /조용히?\s*(?:좀\s*)?(?:해|하[^면고]|하$|있|시켜|[!.~ㅡ…\s]*$)|닥쳐|닥치|시끄러|시끄럽|입\s*(?:좀\s*)?다물|가만히?\s*(?:좀\s*)?있|끼어들지\s*마|나서지\s*마|나대지\s*마|(?:그만|이제)\s*(?:좀\s*)?(?:해|하자|하세요|말해|말하|대답|답변|답해|답하|올려|올리|떠들)|(?:대답|답변|답글|답|말|대꾸|집계|정리|댓글)\s*(?:좀\s*)?(?:그만|하지\s*마|달지\s*마|올리지\s*마|걸지\s*마|금지|멈춰)|(?:^|\s)멈춰[!.~\s]*$|꺼져|shut\s*up|be\s+quiet|(?:stay|keep)\s+(?:quiet|silent)|quiet(?:\s+down)?\s*(?:please|now|!|$)|stop\s+(?:it|replying|answering|responding|talking|posting)|(?:don'?t|do\s+not)\s+(?:reply|answer|respond|post|talk)|\bmute\b|\bhush\b/iu;
+/**
+ * Someone telling the agent to stop talking ("조용히 해", "너 다시 부를 때까지 조용히 있어", "그만 답해", "stop replying").
+ * Short messages only: a long message that happens to contain "조용" is a report, not an order.
+ * 2026-11-16: an agent told this in a thread acknowledged it in text and then answered four more messages.
+ */
+export function isQuietRequest(text: string): boolean {
+  const body = text.replace(/<@[^>]+>/g, '').trim();
+  return body.length > 0 && body.length <= 120 && QUIET.test(body);
+}
+/** Meant for this agent: it is mentioned, or nobody is (in the agent's thread an unaddressed "조용히 해" is about the agent). */
+const quietForMe = (text: string, me: string) => isQuietRequest(text) && (text.includes(`<@${me}>`) || !/<@[^>]+>/.test(text));
+/**
+ * Whether the agent has been told to be quiet in this conversation and not been called back since. Reads the messages
+ * oldest first: a person's "be quiet" silences; a person's later mention of the agent (that is not another "be quiet")
+ * lifts it. Use it on the origin's history when a message arrives, and on the thread as it is NOW before posting an
+ * answer that took minutes to prepare.
+ */
+export function silencedIn(messages: Pick<TeamsHistoryMessage, 'sender' | 'text'>[], me: string): boolean {
+  let silenced = false;
+  for (const m of messages) {
+    if (m.sender.id === me || m.sender.isAgent) continue;
+    if (quietForMe(m.text, me)) silenced = true;
+    else if (m.text.includes(`<@${me}>`)) silenced = false;
+  }
+  return silenced;
+}
 
 /** The shared answer-or-stay-silent rule (see the module comment). */
 export function decideEngagement(origin: TeamsOrigin | null, text: string, self?: { id?: string }): Engagement {
@@ -82,8 +116,14 @@ export function decideEngagement(origin: TeamsOrigin | null, text: string, self?
   const { location } = origin;
   const thread = location.kind === 'thread' && location.parentId ? { channelId: location.id, parentId: location.parentId } : undefined;
   if (location.kind === 'dm') return { respond: true, reason: 'direct-message', ...(thread ? { thread } : {}) };
+  const history = origin.conversation?.messages ?? [];
+  const took = !!me && history.some(m => m.sender.id === me);
+  // "Be quiet", to the agent by name or unaddressed in a thread it takes part in: seen, no text, and silent from here on.
+  if (me && isQuietRequest(text) && (text.includes(`<@${me}>`) || (took && !/<@[^>]+>/.test(text))))
+    return { respond: false, reason: 'quiet-requested', react: QUIET_REACTION, ...(thread ? { thread } : {}) };
   if (me && text.includes(`<@${me}>`)) return { respond: true, reason: 'mentioned', ...(thread ? { thread } : {}) };
-  if (thread && me && (origin.conversation?.messages ?? []).some(m => m.sender.id === me)) {
+  if (thread && me && took) {
+    if (silencedIn(history, me)) return { respond: false, reason: 'silenced', thread };
     if (isThanks(text)) return { respond: false, reason: 'not-addressed', thread, react: THANKS_REACTION };
     const dismissed = quickDismiss(text, origin);
     return dismissed ? { respond: false, reason: 'not-addressed', thread } : { respond: true, reason: 'thread-participant', thread, confirm: true };
@@ -142,6 +182,17 @@ export class TeamsPoster {
     const result = await this.rpc('tools/call', { name: 'add_reaction', arguments: { messageId, emoji } });
     if (result?.isError) throw new Error('AIN Teams refused the reaction');
   }
+  /** The thread as it is now (parent first, then replies oldest first), in the shape silencedIn reads. Needs channels:read. */
+  async threadMessages(parentId: string): Promise<TeamsHistoryMessage[]> {
+    await this.ready();
+    const result = await this.rpc('tools/call', { name: 'read_thread', arguments: { messageId: parentId } });
+    if (result?.isError) throw new Error('AIN Teams refused the thread read');
+    const text = result?.content?.find((b: any) => b?.type === 'text')?.text;
+    let parsed: any; try { parsed = JSON.parse(text); } catch { throw new Error('AIN Teams returned an unreadable thread'); }
+    const rows = [parsed?.parent, ...(Array.isArray(parsed?.replies) ? parsed.replies : [])].filter((m: any) => m && typeof m.userId === 'string' && typeof m.content === 'string');
+    return rows.map((m: any) => ({ id: String(m.id ?? ''), createdAt: String(m.createdAt ?? ''), sender: { id: m.userId, isAgent: m.automation === 'agent' }, text: m.content }))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
   /** Replies in a channel thread; returns the new message id when Teams reports it. */
   async replyInThread(thread: { channelId: string; parentId: string }, content: string): Promise<string | null> {
     await this.ready();
@@ -184,6 +235,7 @@ export function addressingPrompt(origin: TeamsOrigin | null, text: string, opts:
     'Decide whether this new message needs an answer from you.',
     'Answer YES when it asks a question or makes a request about the work discussed in this thread (also when it @mentions a person rather than you, if you can answer it from the same work), or follows up on, corrects or disputes your earlier answer.',
     'Answer NO for thanks, acknowledgements, banter, status updates that ask nothing, scheduling or personal talk between people, or a question clearly meant for one specific person\'s own decision or opinion.',
+    'Answer NO when the message is another person\'s own contribution to the thread (their entry in a poll or sign-up, their opinion, their report to the group) or a remark people make to each other — also when it is about you. Having been asked once for a summary or a count is not a request to post an update each time someone adds something.',
     'Reply with exactly one line: YES or NO, a space, and a short reason.',
     '',
     '<thread>', renderThread(origin, { maxChars: opts.maxChars ?? 12_000, selfLabel: `${name} (you)` }), '</thread>',
