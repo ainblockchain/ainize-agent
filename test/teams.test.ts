@@ -118,6 +118,24 @@ test('told to be quiet, the agent reacts and says nothing more in that thread un
   assert.match(stopPrompt(at(before), `<@${AINA}> 넌 이제 빠져`, { agentName: 'AINA' }), /are you being told to stop\?[\s\S]*STOP or GO[\s\S]*넌 이제 빠져/);
   assert.deepEqual([parseStop('STOP: asked to leave').stop, parseStop('GO a request').stop, parseStop('??').stop], [true, false, false]);
 });
+test('an unaddressed order: the prompt states who wrote the message before it', async () => {
+  const { beforeLine, addressingPrompt, stopPrompt } = await import('../src/teams/index.ts');
+  const AINA = 'aina';
+  const thread = (messages: [string, string][], current?: [string, string]) => parseTeamsOrigin({ location: { kind: 'thread', id: 'ch', parentId: 'root' }, recipient: { id: AINA, displayName: 'AINA' },
+    conversation: { messages: messages.map((m, i) => ({ id: 'm' + i, createdAt: `2026-11-16T10:0${i}:00Z`, sender: { id: m[0], displayName: m[0], isAgent: m[0] === AINA }, text: m[1] })),
+      ...(current ? { current: { id: 'm' + (messages.length - 1), sender: { id: current[0] }, text: current[1] } } : {}) } });
+  // "아 시끄러워" right after the agent's tally (2026-11-17: the model read it as "said to others" from the thread alone)
+  const afterMine = thread([['u-1', 'ainteams'], [AINA, '집계 갱신합니다']]);
+  assert.match(beforeLine(afterMine, '아 시끄러워'), /right before the new one was YOURS/);
+  // people joking with each other: "조용히 해 ㅋㅋ" is theirs
+  const amongPeople = thread([[AINA, '배포 확인했습니다'], ['u-a', '회식 얘기 ㅋㅋ'], ['u-b', '영상 올린다 ㅋㅋ']]);
+  assert.match(beforeLine(amongPeople, '조용히 해 ㅋㅋ'), /another person's \(u-b\), not yours/);
+  // Teams may already list the new message in the history: it is not its own predecessor
+  assert.match(beforeLine(thread([[AINA, '집계 갱신합니다'], ['u-1', '아 시끄러워']], ['u-1', '아 시끄러워']), '아 시끄러워'), /YOURS/);
+  assert.match(beforeLine(thread([[AINA, '집계 갱신합니다'], ['u-1', '아 시끄러워']]), '아 시끄러워'), /YOURS/);
+  assert.match(beforeLine(null, '쉿'), /no earlier message/);
+  for (const prompt of [addressingPrompt(afterMine, '아 시끄러워'), stopPrompt(afterMine, '아 시끄러워')]) assert.match(prompt, /go by the <before> line[\s\S]*<before>The message right before the new one was YOURS\.<\/before>\n\n<new_message>/);
+});
 test('threadMessages() reads the thread as it is now, oldest first, marking agents', async () => {
   const calls: any[] = [];
   const fetchImpl = (async (_url: string, init: any) => {
