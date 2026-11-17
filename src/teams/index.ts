@@ -234,7 +234,19 @@ export function quickDismiss(text: string, origin: TeamsOrigin | null): boolean 
   return false;
 }
 
-const STOP_RULE = 'Answer STOP when the message tells YOU to be quiet, stop replying, leave, or stay out of this conversation — in any wording, polite, indirect, joking or annoyed ("쉿", "넌 빠져", "안 불렀어", "됐어 그만", "우리끼리 얘기할게요", "we\'ll take it from here") — or when people make clear they do not want your replies here. An order that names nobody is for you when it follows your own messages and nobody else is being noisy; it is NOT for you (never STOP) when people are plainly saying it to each other, quoting someone, or talking about something else being quiet or stopping.';
+const STOP_RULE = [
+  'Answer STOP when the message tells YOU to be quiet, stop replying, leave, or stay out of this conversation — in any wording, polite, indirect, joking or annoyed ("쉿", "넌 빠져", "안 불렀어", "됐어 그만", "우리끼리 얘기할게요", "we\'ll take it from here") — or when people make clear they do not want your replies here, also when they say it to each other about you ("누가 얘 좀 꺼줘", "봇 좀 꺼주세요", "someone turn the bot off").',
+  'When the order or complaint names nobody ("조용히 해", "아 시끄러워", "아 좀 그만", "제발 좀", "왜 자꾸 대답해", "더 안 올려도 돼요", "필요하면 다시 부를게요"), go by the <before> line: if it says the message right before was YOURS, the words are for you — STOP. If it says it was another person\'s and those people are talking to each other (a story, a joke, laughter such as "ㅋㅋ"), the order is theirs, however blunt ("조용히 해 ㅋㅋ", "쉿 부장님 오신다", "야 너 빠져 ㅋㅋ"): never STOP. Quoting someone, or talking about something else being quiet or stopping, is never STOP either.',
+].join(' ');
+
+/** Who wrote the message right before the new one — a fact for the model, which misreads it from the thread alone. */
+export function beforeLine(origin: TeamsOrigin | null, text: string): string {
+  const me = origin?.recipient?.id, cur = origin?.conversation?.current;
+  const earlier = (origin?.conversation?.messages ?? []).filter(m => !(cur?.id && m.id === cur.id));
+  if (earlier.length && earlier[earlier.length - 1].sender.id !== me && earlier[earlier.length - 1].text.trim() === text.trim()) earlier.pop();
+  const last = earlier[earlier.length - 1];
+  return `<before>${!last ? 'There is no earlier message.' : last.sender.id === me ? 'The message right before the new one was YOURS.' : `The message right before the new one was another person's (${last.sender.displayName ?? last.sender.id}), not yours.`}</before>`;
+}
 
 /** A short classification prompt for the agent's own model; answer with parseAddressing. */
 export function addressingPrompt(origin: TeamsOrigin | null, text: string, opts: { agentName?: string; maxChars?: number } = {}): string {
@@ -243,12 +255,13 @@ export function addressingPrompt(origin: TeamsOrigin | null, text: string, opts:
     `You are ${name}, an assistant taking part in an AIN Teams thread. A new message arrived in a thread where you answered before.`,
     'Decide whether this new message needs an answer from you.',
     'Answer YES when it asks a question or makes a request about the work discussed in this thread (also when it @mentions a person rather than you, if you can answer it from the same work), or follows up on, corrects or disputes your earlier answer.',
-    'Answer NO for thanks, acknowledgements, banter, status updates that ask nothing, scheduling or personal talk between people, or a question clearly meant for one specific person\'s own decision or opinion.',
-    'Answer NO when the message is another person\'s own contribution to the thread (their entry in a poll or sign-up, their opinion, their report to the group) or a remark people make to each other — also when it is about you. Having been asked once for a summary or a count is not a request to post an update each time someone adds something.',
+    'Answer NO for thanks, acknowledgements, banter, status updates that ask nothing, scheduling or personal talk between people ("위클리 몇 시죠?", lunch, who is on leave — not the work of this thread even when it is a question), or a question clearly meant for one specific person\'s own decision or opinion.',
+    'Answer NO when the message is another person\'s own contribution to the thread (their entry in a poll or sign-up — often just the names of what they pick, such as "ainteams or ainspace" — their opinion, their report to the group) or a remark people make to each other — also when it is about you. Having been asked once for a summary or a count is not a request to post an update each time someone adds something.',
     STOP_RULE,
     'Reply with exactly one line: YES, NO or STOP, a space, and a short reason.',
     '',
     '<thread>', renderThread(origin, { maxChars: opts.maxChars ?? 12_000, selfLabel: `${name} (you)` }), '</thread>',
+    beforeLine(origin, text),
     '', '<new_message>', text, '</new_message>',
   ].join('\n');
 }
@@ -274,6 +287,7 @@ export function stopPrompt(origin: TeamsOrigin | null, text: string, opts: { age
     'Reply with exactly one line: STOP or GO, a space, and a short reason.',
     '',
     '<thread>', renderThread(origin, { maxChars: opts.maxChars ?? 12_000, selfLabel: `${name} (you)` }), '</thread>',
+    beforeLine(origin, text),
     '', '<new_message>', text, '</new_message>',
   ].join('\n');
 }
